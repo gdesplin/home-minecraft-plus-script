@@ -16,14 +16,16 @@ Idempotent bootstrap for a headless **Ubuntu 24.04 LTS** mini-PC that runs:
 2. [Initial Server Setup](#initial-server-setup)
 3. [Clone This Repo](#clone-this-repo)
 4. [Running the Setup Scripts](#running-the-setup-scripts)
-5. [Router Port Forwarding](#router-port-forwarding)
-6. [DuckDNS Setup](#duckdns-setup)
-7. [Starting Minecraft](#starting-minecraft)
-8. [Bedrock Edition Support (Optional)](#bedrock-edition-support-optional)
-9. [Checking Status](#checking-status)
-10. [Backups and Restore](#backups-and-restore)
-11. [Kamal Notes](#kamal-notes)
-12. [Security Hardening](#security-hardening)
+5. [Network Setup Decision Tree](#network-setup-decision-tree)
+6. [Router Port Forwarding](#router-port-forwarding)
+7. [CGNAT / Playit.gg Tunnel](#cgnat--playitgg-tunnel)
+8. [DuckDNS Setup](#duckdns-setup)
+9. [Starting Minecraft](#starting-minecraft)
+10. [Bedrock Edition Support (Optional)](#bedrock-edition-support-optional)
+11. [Checking Status](#checking-status)
+12. [Backups and Restore](#backups-and-restore)
+13. [Kamal Notes](#kamal-notes)
+14. [Security Hardening](#security-hardening)
 
 ---
 
@@ -102,6 +104,7 @@ sudo bash bin/setup-firewall.sh
 sudo bash bin/setup-fail2ban.sh
 
 # 5. DuckDNS dynamic DNS (configure duckdns/.env first — see below)
+#    Skip this step if you are using Playit.gg (see CGNAT section)
 sudo bash bin/setup-duckdns.sh
 
 # 6. Minecraft server (configure minecraft/.env first — see below)
@@ -109,6 +112,9 @@ sudo bash bin/setup-minecraft.sh
 
 # 7. Restic backups (configure backups/restic.env first — see below)
 sudo bash bin/setup-backups.sh
+
+# Optional: Playit.gg tunnel (required when behind CGNAT — see below)
+sudo bash bin/setup-playit.sh
 ```
 
 ### Configure Environment Files
@@ -166,13 +172,174 @@ Minecraft clients connect directly to your public IP (or DuckDNS hostname). You 
    - Use [mcsrvstat.us](https://mcsrvstat.us/) to check if your server is reachable.
    - Or ask a friend to connect to `<your-duckdns-subdomain>.duckdns.org`.
 
-### CGNAT / Double-NAT
+---
 
-If port forwarding doesn't work, your ISP may be using **Carrier-Grade NAT (CGNAT)**. Signs:
-- Your router's WAN IP is in `100.64.0.0/10` or `10.x.x.x`
-- `curl ifconfig.me` on the server differs from your router's WAN IP
+## Network Setup Decision Tree
 
-In that case, contact your ISP and request a **public IP address**, or consider a Tailscale relay.
+Before diving into port forwarding or tunnels, figure out which approach applies to you:
+
+```
+1. Run on your server:
+      curl ifconfig.me
+   Compare the result to your router's WAN IP (shown in the router admin panel).
+
+   ┌─ Router WAN IP starts with 100.64.x.x (CGNAT range)? ─────► Use Playit.gg
+   ├─ Router WAN IP differs from curl ifconfig.me result? ──────► Use Playit.gg
+   └─ Router WAN IP matches curl ifconfig.me? ──────────────────► Port forwarding + DuckDNS
+
+2. If using Playit.gg:
+   • Skip router port forwarding
+   • Skip DuckDNS setup (optional to keep for other services like Rails)
+   • Players connect to: yourname.joinplayit.gg
+
+3. If using DuckDNS + port forwarding:
+   • Configure router port forwards (see Router Port Forwarding below)
+   • Set up DuckDNS (see DuckDNS Setup below)
+   • Players connect to: yourname.duckdns.org
+```
+
+> **Quick check:** The definitive CGNAT indicator is `100.64.0.0/10` as the router WAN IP,
+> or a mismatch between your router's WAN IP and `curl ifconfig.me`. Some ISPs assign
+> `10.x.x.x` WAN addresses without CGNAT — compare both values to be sure.
+
+---
+
+## Router Port Forwarding
+
+> **Skip this section if you are behind CGNAT.** See [CGNAT / Playit.gg Tunnel](#cgnat--playitgg-tunnel) instead.
+
+Minecraft clients connect directly to your public IP (or DuckDNS hostname). You need to forward **two ports** if you want both Java and Bedrock players to connect:
+
+| Edition | Protocol | Port |
+|---------|----------|------|
+| Java | TCP | 25565 |
+| Bedrock (Geyser) | UDP | 19132 |
+
+### Steps
+
+1. **Give the server a stable LAN IP:**
+   - Preferred: Set a **DHCP reservation** in your router using the server's MAC address.
+   - Alternative: Configure a static IP in Ubuntu (`/etc/netplan/`).
+
+2. **Log in to your router admin panel** (often `192.168.1.1` or `192.168.0.1`).
+
+3. **Create port-forward rules:**
+
+   **Java Edition (required):**
+   - Protocol: **TCP**
+   - External port: **25565**
+   - Internal IP: your server's LAN IP (e.g. `192.168.1.50`)
+   - Internal port: **25565**
+
+   **Bedrock Edition / Geyser (optional — skip if you don't need Bedrock crossplay):**
+   - Protocol: **UDP**
+   - External port: **19132**
+   - Internal IP: your server's LAN IP (e.g. `192.168.1.50`)
+   - Internal port: **19132**
+
+4. **Test from outside your LAN:**
+   - Use [mcsrvstat.us](https://mcsrvstat.us/) to check if your server is reachable.
+   - Or ask a friend to connect to `<your-duckdns-subdomain>.duckdns.org`.
+
+---
+
+## CGNAT / Playit.gg Tunnel
+
+### What is CGNAT?
+
+**Carrier-Grade NAT (CGNAT)** is a practice where ISPs share a single public IP address among
+many customers. This makes it impossible to receive incoming connections (like Minecraft players
+connecting to your server) through traditional port forwarding.
+
+**How to detect CGNAT:**
+
+- Log in to your router admin panel and look at the **WAN IP address**.
+- Run `curl ifconfig.me` on the server and compare to your router's WAN IP.
+- If they **differ**, you are behind CGNAT.
+- If the router WAN IP starts with `100.64.x.x` (range `100.64.0.0/10`), you are definitively behind CGNAT.
+- If they match but you still can't port-forward, check for firewall rules at the ISP level.
+
+### Playit.gg — Free Tunneling Solution
+
+[Playit.gg](https://playit.gg) is a free tunneling service built specifically for game servers.
+It routes traffic through Playit's servers so your players can connect even when port forwarding
+is impossible. Latency impact is minimal (typically under 10 ms).
+
+### Installation
+
+```bash
+sudo bash bin/setup-playit.sh
+```
+
+This script:
+- Adds the official Playit.gg APT repository
+- Installs the `playit` agent
+- Creates a dedicated `playit` system user for security
+- Sets up `/opt/playit/` as the agent's working directory
+- Installs the `playit.service` systemd unit
+
+### First-Time Tunnel Claim (one-time)
+
+```bash
+sudo -u playit playit
+```
+
+The agent will print a URL. Open it in a browser and log in (or create a free account) at
+[playit.gg](https://playit.gg). Once claimed, configure your tunnels on the dashboard:
+
+| Tunnel type | Port | Purpose |
+|-------------|------|---------|
+| TCP | 25565 | Minecraft Java Edition |
+| UDP | 19132 | Minecraft Bedrock / Geyser (optional) |
+
+After claiming, press **Ctrl+C** to exit.
+
+### Enable the Service
+
+```bash
+sudo systemctl enable --now playit
+```
+
+The agent will now start automatically on every boot.
+
+### Player Connection
+
+Players connect using your **Playit.gg tunnel address** instead of DuckDNS:
+
+```
+yourname.joinplayit.gg
+```
+
+The exact address is shown on your [playit.gg dashboard](https://playit.gg).
+
+> **Note:** DuckDNS is **not needed** for Minecraft when using Playit.gg. You can keep
+> DuckDNS if you use it for other services (e.g. Rails apps via Kamal).
+
+### Managing the Playit.gg Service
+
+```bash
+# Check tunnel status
+sudo systemctl status playit
+
+# View live logs
+sudo journalctl -u playit -f
+
+# Restart the tunnel
+sudo systemctl restart playit
+
+# Stop the tunnel
+sudo systemctl stop playit
+```
+
+### Playit.gg Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Agent not starting | `sudo systemctl status playit` — check for errors |
+| Can't claim tunnel | Visit [playit.gg](https://playit.gg), log in, and re-run `sudo -u playit playit` |
+| Connection refused by players | Make sure the Minecraft server is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
+| Tunnel shows offline | Restart the service: `sudo systemctl restart playit` |
+| Wrong tunnel address | Check the dashboard at [playit.gg](https://playit.gg) for your current address |
 
 ---
 
@@ -454,7 +621,10 @@ sudo docker exec mc rcon-cli "whitelist add .Steve"
 │   ├── setup-duckdns.sh    # DuckDNS systemd service + timer
 │   ├── setup-minecraft.sh  # Minecraft compose stack
 │   ├── setup-backups.sh    # Restic + systemd backup timer
+│   ├── setup-playit.sh     # Playit.gg tunnel (CGNAT support)
 │   └── status.sh           # Health dashboard
+├── config/
+│   └── playit.service      # Systemd service unit for Playit.gg agent
 ├── minecraft/
 │   ├── compose.yml         # Docker Compose for Minecraft
 │   └── .env.example        # Minecraft environment template
