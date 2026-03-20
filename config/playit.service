@@ -1,0 +1,18 @@
+[Unit]
+Description=Playit.gg Tunnel for Minecraft
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=playit
+Group=playit
+WorkingDirectory=/opt/playit
+ExecStart=/usr/bin/playit
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

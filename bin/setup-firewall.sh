@@ -45,6 +45,9 @@ ufw allow 22/tcp comment 'SSH'
 ok "SSH allowed."
 
 # ── Minecraft Java Edition ────────────────────────────────────────────────────
+# Note: If using Playit.gg tunnel (for CGNAT scenarios), these ports only need
+# to be accessible locally — the playit agent running on localhost connects to
+# them.  Opening them in UFW is still correct and harmless either way.
 info "Allowing Minecraft (port 25565/tcp)..."
 ufw allow 25565/tcp comment 'Minecraft Java'
 ok "Minecraft port allowed."
