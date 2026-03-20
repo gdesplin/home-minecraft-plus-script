@@ -18,8 +18,10 @@ services:
     tty: true
 
     ports:
-      # Minecraft game port — exposed to the world
+      # Java Edition (TCP) — standard Minecraft port
       - "25565:25565"
+      # Bedrock Edition (UDP) — used by Geyser for Xbox/Switch/mobile/Windows 10 players
+      - "19132:19132/udp"
       # RCON — bound to localhost only for security
       - "127.0.0.1:25575:25575"
 
@@ -76,6 +78,11 @@ services:
       # WHITELIST: "${WHITELIST:-}"          # comma-separated whitelisted usernames
       # ENFORCE_WHITELIST: "${ENFORCE_WHITELIST:-false}"
       # LEVEL_SEED: "${LEVEL_SEED:-}"        # custom world seed
+
+      # ── Bedrock Edition crossplay (Geyser + Floodgate) ────────────────────
+      # Enables Bedrock players (Xbox, Switch, mobile) to join via UDP port 19132.
+      GEYSER_ENABLED: "${GEYSER_ENABLED:-true}"
+      FLOODGATE_ENABLED: "${FLOODGATE_ENABLED:-true}"
 
     volumes:
       # World data + config persisted here

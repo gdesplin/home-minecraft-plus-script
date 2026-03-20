@@ -19,10 +19,11 @@ Idempotent bootstrap for a headless **Ubuntu 24.04 LTS** mini-PC that runs:
 5. [Router Port Forwarding](#router-port-forwarding)
 6. [DuckDNS Setup](#duckdns-setup)
 7. [Starting Minecraft](#starting-minecraft)
-8. [Checking Status](#checking-status)
-9. [Backups and Restore](#backups-and-restore)
-10. [Kamal Notes](#kamal-notes)
-11. [Security Hardening](#security-hardening)
+8. [Bedrock Edition Support (Optional)](#bedrock-edition-support-optional)
+9. [Checking Status](#checking-status)
+10. [Backups and Restore](#backups-and-restore)
+11. [Kamal Notes](#kamal-notes)
+12. [Security Hardening](#security-hardening)
 
 ---
 
@@ -132,7 +133,12 @@ nano backups/restic.env   # fill in RESTIC_REPOSITORY and RESTIC_PASSWORD
 
 ## Router Port Forwarding
 
-Minecraft clients connect directly to your public IP (or DuckDNS hostname) on **TCP port 25565**.
+Minecraft clients connect directly to your public IP (or DuckDNS hostname). You need to forward **two ports** if you want both Java and Bedrock players to connect:
+
+| Edition | Protocol | Port |
+|---------|----------|------|
+| Java | TCP | 25565 |
+| Bedrock (Geyser) | UDP | 19132 |
 
 ### Steps
 
@@ -142,11 +148,19 @@ Minecraft clients connect directly to your public IP (or DuckDNS hostname) on **
 
 2. **Log in to your router admin panel** (often `192.168.1.1` or `192.168.0.1`).
 
-3. **Create a port-forward rule:**
+3. **Create port-forward rules:**
+
+   **Java Edition (required):**
    - Protocol: **TCP**
    - External port: **25565**
    - Internal IP: your server's LAN IP (e.g. `192.168.1.50`)
    - Internal port: **25565**
+
+   **Bedrock Edition / Geyser (optional — skip if you don't need Bedrock crossplay):**
+   - Protocol: **UDP**
+   - External port: **19132**
+   - Internal IP: your server's LAN IP (e.g. `192.168.1.50`)
+   - Internal port: **19132**
 
 4. **Test from outside your LAN:**
    - Use [mcsrvstat.us](https://mcsrvstat.us/) to check if your server is reachable.
@@ -217,6 +231,67 @@ cd /opt/minecraft && sudo docker compose restart
 ```bash
 sudo docker exec mc rcon-cli "op YourUsername"
 ```
+
+---
+
+## Bedrock Edition Support (Optional)
+
+[Geyser](https://geysermc.org/) + [Floodgate](https://wiki.geysermc.org/floodgate/) are supported by the `itzg/minecraft-server` image and are **enabled by default in this setup** (via `GEYSER_ENABLED=true` and `FLOODGATE_ENABLED=true` in `.env.example`). They allow players on Xbox, Switch, mobile (iOS/Android), and Windows 10/11 Bedrock Edition to join your Java Paper server.
+
+### How to Connect (Bedrock Players)
+
+1. Open Minecraft on your Bedrock device (Xbox, Switch, mobile, Windows 10/11).
+2. Go to **Play → Servers → Add Server**.
+3. Enter:
+   - **Server Address:** `yourname.duckdns.org`
+   - **Port:** `19132`
+4. Connect and join!
+
+> **Note:** You must have UDP port 19132 forwarded on your router (see [Router Port Forwarding](#router-port-forwarding)).
+
+### Whitelisting Bedrock Players
+
+Bedrock players join with a prefix before their username (default prefix: `.`).
+
+For example, a Bedrock player with gamertag `Steve` appears as `.Steve` in-game.
+
+To whitelist a Bedrock player, include the prefixed name:
+
+```env
+# In minecraft/.env
+WHITELIST=JavaPlayer,.BedrockPlayer
+ENFORCE_WHITELIST=true
+```
+
+Or via RCON at runtime (no restart needed):
+
+```bash
+sudo docker exec mc rcon-cli "whitelist add .BedrockPlayer"
+sudo docker exec mc rcon-cli "whitelist reload"
+```
+
+### Disabling Bedrock Support
+
+If you don't need Bedrock crossplay, set these in `minecraft/.env`:
+
+```env
+GEYSER_ENABLED=false
+FLOODGATE_ENABLED=false
+```
+
+Then restart the container:
+
+```bash
+cd /opt/minecraft && sudo docker compose restart
+```
+
+You can also skip forwarding UDP 19132 on your router in this case.
+
+### Known Limitations
+
+- Some Java Edition features don't translate perfectly to Bedrock (e.g. certain redstone mechanics, inventory UI differences).
+- Bedrock players use a slightly different combat system.
+- Performance overhead is minimal — negligible for ~10 players.
 
 ---
 
@@ -328,6 +403,40 @@ sudo fail2ban-client status sshd
 ```bash
 sudo apt install -y unattended-upgrades
 sudo dpkg-reconfigure -plow unattended-upgrades
+```
+
+---
+
+## Troubleshooting / FAQ
+
+### Bedrock players can't connect
+
+1. **Check UDP 19132 is forwarded on your router** — TCP forwarding alone is not enough. Bedrock uses UDP.
+2. **Verify the UFW rule is active:**
+   ```bash
+   sudo ufw status | grep 19132
+   ```
+   You should see `19132/udp  ALLOW  Anywhere`.
+3. **Confirm Geyser is enabled** in `minecraft/.env`:
+   ```env
+   GEYSER_ENABLED=true
+   FLOODGATE_ENABLED=true
+   ```
+4. Restart the container after any `.env` change:
+   ```bash
+   cd /opt/minecraft && sudo docker compose restart
+   ```
+
+### Whitelist not working for Bedrock players
+
+Bedrock players use a prefixed username (default prefix: `.`). Make sure to include the prefix when whitelisting:
+
+```bash
+# Wrong (Java format)
+sudo docker exec mc rcon-cli "whitelist add Steve"
+
+# Correct (Bedrock format with Floodgate prefix)
+sudo docker exec mc rcon-cli "whitelist add .Steve"
 ```
 
 ---

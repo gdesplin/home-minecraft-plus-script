@@ -49,6 +49,11 @@ info "Allowing Minecraft (port 25565/tcp)..."
 ufw allow 25565/tcp comment 'Minecraft Java'
 ok "Minecraft port allowed."
 
+# ── Minecraft Bedrock Edition (Geyser) ───────────────────────────────────────
+info "Allowing Minecraft Bedrock Edition via Geyser (port 19132/udp)..."
+ufw allow 19132/udp comment 'Minecraft Bedrock (Geyser)'
+ok "Minecraft Bedrock port allowed."
+
 # ── HTTP/HTTPS for Kamal/Traefik ──────────────────────────────────────────────
 info "Allowing HTTP (80/tcp) and HTTPS (443/tcp) for Kamal/Traefik..."
 ufw allow 80/tcp  comment 'HTTP (Kamal/Traefik)'
