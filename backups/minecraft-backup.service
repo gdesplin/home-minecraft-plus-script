@@ -1,0 +1,19 @@
+[Unit]
+Description=Minecraft world restic backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/minecraft-backup.sh
+StandardOutput=journal
+StandardError=journal
+
+# Prevent the backup from running if Docker is restarting
+ConditionPathExists=/opt/minecraft/data
+
+# Give the backup plenty of time to finish (30 minutes max)
+TimeoutStartSec=1800
+
+# Make the service resilient to transient failures
+Restart=no

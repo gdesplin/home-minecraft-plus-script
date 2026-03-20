@@ -1,0 +1,15 @@
+[Unit]
+Description=Minecraft world restic backup timer (hourly)
+
+[Timer]
+# Start 5 minutes after boot (give Docker time to start)
+OnBootSec=5min
+# Then repeat every hour
+OnUnitActiveSec=1h
+# Run at a randomised offset within 5 minutes to avoid thundering herds
+RandomizedDelaySec=5min
+# Catch up on missed runs (e.g., if the system was off)
+Persistent=true
+
+[Install]
+WantedBy=timers.target

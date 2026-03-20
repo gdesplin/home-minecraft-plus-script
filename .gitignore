@@ -1,0 +1,17 @@
+# Secret environment files — never commit these
+minecraft/.env
+duckdns/.env
+backups/restic.env
+/etc/restic/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Logs
+*.log
