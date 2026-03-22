@@ -45,8 +45,8 @@ ufw allow 22/tcp comment 'SSH'
 ok "SSH allowed."
 
 # ── Minecraft Java Edition ────────────────────────────────────────────────────
-# Note: If using the Playit.gg plugin (for CGNAT scenarios), the plugin handles
-# tunneling from inside the container.  Opening these ports in UFW is still
+# Note: If using the playit.gg agent (for CGNAT scenarios), the agent tunnels
+# traffic to this port from the internet.  Opening this port in UFW is still
 # correct and harmless either way.
 info "Allowing Minecraft (port 25565/tcp)..."
 ufw allow 25565/tcp comment 'Minecraft Java'

@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
-# setup-playit.sh — Enable the Playit.gg Paper plugin for CGNAT scenarios
+# setup-playit.sh — Install the playit.gg standalone agent for CGNAT scenarios
 # Idempotent: safe to run multiple times.
 #
-# This script enables the Playit.gg Paper/Spigot plugin so the Minecraft
-# server can accept player connections even when the host is behind CGNAT
-# (no port-forwarding needed).
-#
-# The plugin runs inside the Paper server itself — no separate system service,
-# APT package, or dedicated user is required.
-#
-# How it works:
-#   1. Adds PLUGINS=<url> to /opt/minecraft/.env so the itzg Docker image
-#      auto-downloads the plugin JAR from GitHub on each container start.
-#   2. Restarts the Minecraft container to pick up the change.
-#   3. The plugin prints a claim URL to the server console on first run.
+# This script installs the official playit binary from GitHub, creates a
+# dedicated system user, and manages it as a systemd service (playit.service).
+# The agent tunnels traffic to localhost:25565 so players can connect even
+# when the host is behind CGNAT (no port-forwarding needed).
 set -euo pipefail
 
-MC_DEST="/opt/minecraft"
-ENV_FILE="${MC_DEST}/.env"
-PLUGIN_URL="https://github.com/playit-cloud/playit-minecraft-plugin/releases/latest/download/playit-minecraft-plugin.jar"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PLAYIT_BIN="/usr/local/bin/playit"
+PLAYIT_DIR="/etc/playit"
+PLAYIT_SERVICE="/etc/systemd/system/playit.service"
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [ OK ]  $*"; }
@@ -36,100 +30,105 @@ require_root
 
 echo ""
 echo "============================================"
-echo "  setup-playit.sh — Playit.gg Plugin"
+echo "  setup-playit.sh — Playit.gg Agent"
+echo "  (standalone binary, systemd managed)"
 echo "============================================"
 echo ""
 
-# ── Verify Minecraft is deployed ──────────────────────────────────────────────
-if [[ ! -f "${ENV_FILE}" ]]; then
-  err "Minecraft .env not found at ${ENV_FILE}."
-  err "Run setup-minecraft.sh first."
-  exit 1
-fi
-
-if [[ ! -f "${MC_DEST}/compose.yml" ]]; then
-  err "compose.yml not found at ${MC_DEST}/compose.yml."
-  err "Run setup-minecraft.sh first."
-  exit 1
-fi
-
-# ── Verify server type supports plugins ───────────────────────────────────────
-SERVER_TYPE=$(grep -i "^TYPE=" "${ENV_FILE}" | tail -1 | cut -d= -f2 || echo "")
-SERVER_TYPE="${SERVER_TYPE:-PAPER}"
-case "${SERVER_TYPE^^}" in
-  PAPER|SPIGOT|BUKKIT)
-    ok "Server type '${SERVER_TYPE}' supports plugins."
-    ;;
+# ── 1. Detect architecture ────────────────────────────────────────────────────
+ARCH=$(uname -m)
+case "${ARCH}" in
+  x86_64)  PLAYIT_ARCH="amd64" ;;
+  aarch64) PLAYIT_ARCH="arm64" ;;
   *)
-    err "Server type '${SERVER_TYPE}' does not support Spigot/Paper plugins."
-    err "The Playit.gg plugin requires TYPE=PAPER (recommended) or TYPE=SPIGOT."
+    err "Unsupported architecture: ${ARCH}. Only x86_64 and aarch64 are supported."
     exit 1
     ;;
 esac
+info "Detected architecture: ${ARCH} → playit-linux-${PLAYIT_ARCH}"
 
-# ── Add PLUGINS URL to .env ───────────────────────────────────────────────────
-if grep -q "^PLUGINS=.*playit-minecraft-plugin" "${ENV_FILE}" 2>/dev/null; then
-  ok "Playit.gg plugin URL is already in PLUGINS."
-elif grep -q "^PLUGINS=" "${ENV_FILE}" 2>/dev/null; then
-  # PLUGINS exists but doesn't include the playit plugin — append it
-  CURRENT=$(grep "^PLUGINS=" "${ENV_FILE}" | tail -1 | cut -d= -f2-)
-  if [[ -z "${CURRENT}" ]]; then
-    sed -i "s|^PLUGINS=.*|PLUGINS=${PLUGIN_URL}|" "${ENV_FILE}"
-  else
-    sed -i "s|^PLUGINS=.*|PLUGINS=${CURRENT},${PLUGIN_URL}|" "${ENV_FILE}"
-  fi
-  ok "Added Playit.gg plugin URL to existing PLUGINS."
-elif grep -q "^# *PLUGINS=" "${ENV_FILE}" 2>/dev/null; then
-  # Commented-out PLUGINS line — uncomment and set
-  sed -i "s|^# *PLUGINS=.*|PLUGINS=${PLUGIN_URL}|" "${ENV_FILE}"
-  ok "Uncommented and set PLUGINS to Playit.gg plugin URL."
+# ── 2. Download playit binary ─────────────────────────────────────────────────
+PLAYIT_URL="https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-${PLAYIT_ARCH}"
+info "Downloading playit binary from GitHub..."
+curl -fsSL -o "${PLAYIT_BIN}" "${PLAYIT_URL}"
+chmod +x "${PLAYIT_BIN}"
+ok "playit binary installed at ${PLAYIT_BIN}."
+
+# ── 3. Create playit system user ──────────────────────────────────────────────
+if ! id playit &>/dev/null; then
+  info "Creating 'playit' system user..."
+  useradd -r -s /usr/sbin/nologin playit
+  ok "User 'playit' created."
 else
-  # No PLUGINS line at all — add it
-  {
-    echo ""
-    echo "# Playit.gg plugin for CGNAT tunneling"
-    echo "PLUGINS=${PLUGIN_URL}"
-  } >> "${ENV_FILE}"
-  ok "Added PLUGINS=${PLUGIN_URL} to ${ENV_FILE}."
+  ok "User 'playit' already exists."
 fi
 
-# ── Restart the Minecraft container ───────────────────────────────────────────
-info "Restarting Minecraft container to download the plugin..."
-cd "${MC_DEST}"
-if docker compose ps 2>/dev/null | grep -q "running\|Up"; then
-  docker compose up -d --force-recreate
-  ok "Minecraft container restarted."
-else
-  warn "Minecraft container is not running. Starting it..."
-  docker compose up -d
-  ok "Minecraft container started."
-fi
+# ── 4. Create /etc/playit directory ──────────────────────────────────────────
+info "Creating ${PLAYIT_DIR}..."
+mkdir -p "${PLAYIT_DIR}"
+chown playit:playit "${PLAYIT_DIR}"
+ok "${PLAYIT_DIR} ready."
 
+# ── 5. Write systemd unit ─────────────────────────────────────────────────────
+info "Writing ${PLAYIT_SERVICE}..."
+cat > "${PLAYIT_SERVICE}" <<'EOF'
+[Unit]
+Description=Playit.gg Tunnel Agent
+After=network-online.target minecraft.service
+Wants=network-online.target
+
+[Service]
+User=playit
+Group=playit
+WorkingDirectory=/etc/playit
+ExecStart=/usr/local/bin/playit
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=playit
+
+[Install]
+WantedBy=multi-user.target
+EOF
+ok "playit.service written."
+
+# ── 6. Enable and start the service ──────────────────────────────────────────
+info "Reloading systemd and enabling playit.service..."
+systemctl daemon-reload
+systemctl enable playit.service
+info "Starting playit.service..."
+systemctl start playit.service
+ok "playit.service enabled and started."
+
+# ── 7. Show initial logs (claim URL) ─────────────────────────────────────────
 echo ""
-echo "✓ Playit.gg plugin enabled."
+info "Waiting 3 seconds for the agent to start..."
+sleep 3
+echo ""
+echo "  ── Recent playit logs ──────────────────────────────────────────────────"
+journalctl -u playit -n 30 --no-pager || true
+echo "  ────────────────────────────────────────────────────────────────────────"
+echo ""
+
+echo "✓ Playit.gg agent installed."
 echo ""
 echo "  ┌─ NEXT STEPS ──────────────────────────────────────────────────────────┐"
 echo "  │                                                                       │"
-echo "  │  1. Wait for the server to finish starting (~60–90 s), then check     │"
-echo "  │     the server console for a Playit.gg claim URL:                     │"
-echo "  │       sudo docker compose -f ${MC_DEST}/compose.yml logs -f           │"
+echo "  │  1. Look for a claim URL in the log output above:                    │"
+echo "  │       https://playit.gg/claim/xxxxx                                  │"
+echo "  │     Or follow live logs:                                              │"
+echo "  │       journalctl -u playit -f                                         │"
 echo "  │                                                                       │"
-echo "  │     Look for a line like:                                             │"
-echo "  │       [playit-gg] Visit https://playit.gg/claim/xxxxx to claim ...    │"
+echo "  │  2. Open the URL in a browser and log in to playit.gg.               │"
+echo "  │     Claim the agent — this links it to your account.                 │"
 echo "  │                                                                       │"
-echo "  │  2. Open the URL in a browser and log in to playit.gg.                │"
+echo "  │  3. On the playit.gg dashboard the agent auto-creates a TCP tunnel   │"
+echo "  │     for port 25565 (localhost:25565 → internet).                     │"
 echo "  │                                                                       │"
-echo "  │  3. The plugin automatically creates a TCP tunnel for port 25565.     │"
-echo "  │     For Bedrock (UDP 19132), add a tunnel on the playit.gg dashboard. │"
-echo "  │                                                                       │"
-echo "  │  4. Share your tunnel address with players:                           │"
-echo "  │       yourname.joinplayit.gg                                          │"
+echo "  │  4. Share your tunnel address with players:                          │"
+echo "  │       yourname.joinplayit.gg                                         │"
+echo "  │     (The exact address is shown on the playit.gg dashboard.)         │"
 echo "  │                                                                       │"
 echo "  └───────────────────────────────────────────────────────────────────────┘"
-echo ""
-echo "  Useful commands:"
-echo "    sudo docker compose -f ${MC_DEST}/compose.yml logs -f"
-echo "    sudo docker exec mc rcon-cli"
-echo ""
-echo "  Plugin data is stored in: ${MC_DEST}/data/plugins/PlayitGg/"
 echo ""
