@@ -275,21 +275,26 @@ This script:
 - Adds the official Playit.gg APT repository
 - Installs the `playit` agent via APT
 - Creates a dedicated `playit` system user for security
-- Creates `/etc/playit/` — the canonical config directory (config lives at `/etc/playit/playit.toml`)
-- Sets up `/opt/playit/` as the agent's working directory
+- Sets up `/opt/playit/` — the directory where the APT package installs the binary (`/opt/playit/playit`)
+- Creates `/etc/playit/` — the canonical secret/config directory used by the vendor systemd unit
 - Writes a systemd drop-in override at `/etc/systemd/system/playit.service.d/override.conf`
   to run the service as the `playit` user — **without** overwriting the vendor unit at
   `/usr/lib/systemd/system/playit.service`
 
+> **Note:** The official Playit APT package (v0.17.1) installs the binary at
+> **`/opt/playit/playit`** only — it does **not** add `playit` to `$PATH`.
+> `which playit` will return nothing even after a successful install; this is expected.
+> Always use the full path `/opt/playit/playit` for any manual command.
+
 ### First-Time Tunnel Claim (one-time)
 
 > ⚠ **Critical:** always claim the agent as the **`playit` service user**, never as your own login.
-> Running `playit` as your normal user writes a separate secret key to `~/.config/playit_gg/`
+> Running `/opt/playit/playit` as your normal user writes a separate secret key to `~/.config/playit_gg/`
 > and registers a duplicate agent identity. The service then runs as a different agent than the
 > one you claimed, causing tunnels to appear "online" on the dashboard but receive no traffic.
 
 ```bash
-sudo -u playit playit
+sudo -u playit /opt/playit/playit
 ```
 
 The agent will print a URL. Open it in a browser and log in (or create a free account) at
@@ -312,15 +317,12 @@ After claiming, press **Ctrl+C** to exit.
 sudo systemctl enable --now playit
 ```
 
-The agent will now start automatically on every boot. Verify it is using a single identity:
+The agent will now start automatically on every boot. Verify it is running:
 
 ```bash
-sudo cat /etc/playit/playit.toml
-sudo tail -f /var/log/playit/playit.log
+sudo systemctl status playit
+sudo journalctl -u playit -n 30
 ```
-
-The log should show `tunnel running, 1 tunnels registered` (not zero, and not a repeated
-auth-failure loop).
 
 ### Player Connection
 
@@ -359,11 +361,48 @@ sudo systemctl stop playit
 | Problem | Solution |
 |---------|----------|
 | Agent not starting | `sudo systemctl status playit` — check for errors |
-| Can't claim tunnel | Re-run `sudo -u playit playit` — do **not** run as your normal user |
+| Can't claim tunnel | Re-run `sudo -u playit /opt/playit/playit` — do **not** run as your normal user |
 | Connection refused by players | Make sure Minecraft is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
 | Tunnel shows offline | Restart the service: `sudo systemctl restart playit` |
 | Wrong tunnel address | Check the dashboard at [playit.gg](https://playit.gg) for your current address |
-| **Tunnel online, but no traffic / connection attempts** | You have duplicate agent identities — see below |
+| **`which playit` returns nothing** | Expected — the APT package installs to `/opt/playit/playit` only (not on `$PATH`). Use the full path for all manual commands. See [below](#which-playit-returns-nothing). |
+| **Tunnel online, but no traffic / connection attempts** | You have duplicate agent identities — see [below](#duplicate-agent-identity-tunnel-online-no-traffic) |
+
+#### `which playit` Returns Nothing
+
+**Symptom:** `which playit` prints nothing even though `apt-cache policy playit` shows the
+package is installed (e.g. `Installed: 0.17.1`).
+
+**Cause:** The official Playit APT package (v0.17.1) installs the binary at
+`/opt/playit/playit` — it does **not** create a symlink in `/usr/bin/` or anywhere else on
+`$PATH`. This is the expected layout for this package version.
+
+**Verify the binary is present:**
+
+```bash
+ls -l /opt/playit/playit
+/opt/playit/playit --version
+```
+
+**Fix:** use the full path for all manual Playit commands:
+
+```bash
+# Claim / interactive run
+sudo -u playit /opt/playit/playit
+
+# Check version
+/opt/playit/playit --version
+
+# The systemd service uses the full path automatically — no action needed there.
+sudo systemctl cat playit   # ExecStart should reference /opt/playit/playit
+```
+
+If `/opt/playit/playit` does not exist, reinstall:
+
+```bash
+sudo apt-get install --reinstall playit
+ls -l /opt/playit/playit
+```
 
 #### Duplicate Agent Identity (tunnel online, no traffic)
 
@@ -372,8 +411,8 @@ sudo systemctl stop playit
 lines and players cannot connect.
 
 **Cause:** the tunnel on the dashboard is bound to a different secret key than the one
-the running service is using. This happens when `playit` was run as your normal user at
-some point, creating `~/.config/playit_gg/playit.toml` with a separate identity.
+the running service is using. This happens when `/opt/playit/playit` was run as your normal
+user at some point, creating `~/.config/playit_gg/playit.toml` with a separate identity.
 
 **Diagnosis:**
 
@@ -420,7 +459,8 @@ sudo systemctl daemon-reload
 sudo bash bin/setup-playit.sh
 
 # 6. Claim as the service user (one identity only)
-sudo -u playit playit
+# NOTE: 'which playit' returns nothing — always use the full path
+sudo -u playit /opt/playit/playit
 # → open the URL, claim, set tunnel local address to 127.0.0.1:25565, Ctrl+C
 
 # 7. Enable and start
