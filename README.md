@@ -137,43 +137,6 @@ nano backups/restic.env   # fill in RESTIC_REPOSITORY and RESTIC_PASSWORD
 
 ---
 
-## Router Port Forwarding
-
-Minecraft clients connect directly to your public IP (or DuckDNS hostname). You need to forward **two ports** if you want both Java and Bedrock players to connect:
-
-| Edition | Protocol | Port |
-|---------|----------|------|
-| Java | TCP | 25565 |
-| Bedrock (Geyser) | UDP | 19132 |
-
-### Steps
-
-1. **Give the server a stable LAN IP:**
-   - Preferred: Set a **DHCP reservation** in your router using the server's MAC address.
-   - Alternative: Configure a static IP in Ubuntu (`/etc/netplan/`).
-
-2. **Log in to your router admin panel** (often `192.168.1.1` or `192.168.0.1`).
-
-3. **Create port-forward rules:**
-
-   **Java Edition (required):**
-   - Protocol: **TCP**
-   - External port: **25565**
-   - Internal IP: your server's LAN IP (e.g. `192.168.1.50`)
-   - Internal port: **25565**
-
-   **Bedrock Edition / Geyser (optional — skip if you don't need Bedrock crossplay):**
-   - Protocol: **UDP**
-   - External port: **19132**
-   - Internal IP: your server's LAN IP (e.g. `192.168.1.50`)
-   - Internal port: **19132**
-
-4. **Test from outside your LAN:**
-   - Use [mcsrvstat.us](https://mcsrvstat.us/) to check if your server is reachable.
-   - Or ask a friend to connect to `<your-duckdns-subdomain>.duckdns.org`.
-
----
-
 ## Network Setup Decision Tree
 
 Before diving into port forwarding or tunnels, figure out which approach applies to you:
