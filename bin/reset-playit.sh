@@ -19,7 +19,7 @@
 #
 # AFTER RUNNING THIS SCRIPT:
 #   • Re-run:  sudo bash bin/setup-playit.sh
-#   • Claim:   sudo -u playit /opt/playit/playit
+#   • Claim:   sudo -u playit /opt/playit/playit --secret_path /etc/playit/playit.toml
 #   • Enable:  sudo systemctl enable --now playit
 #
 # NOTE: Go to https://playit.gg → Agents and DELETE any stale agents from
@@ -101,12 +101,9 @@ if [[ -n "${SUDO_USER:-}" ]]; then
   ok "Removed ${USER_HOME}/.config/playit_gg"
 fi
 
-info "Removing playit user home config (/home/playit/.config)..."
-rm -rf /home/playit/.config/playit_gg
-ok "Removed /home/playit/.config/playit_gg (if it existed)."
-
-# Also clean up if the playit user's home is /opt/playit (non-standard home)
-rm -rf /opt/playit/.config/playit_gg 2>/dev/null || true
+info "Removing playit user home config (/opt/playit/.config)..."
+rm -rf /opt/playit/.config/playit_gg
+ok "Removed /opt/playit/.config/playit_gg (if it existed)."
 
 # ── 4. Reload systemd ─────────────────────────────────────────────────────────
 info "Reloading systemd..."
@@ -131,7 +128,8 @@ else
   echo "    sudo bash ${REPO_ROOT}/bin/setup-playit.sh"
   echo ""
   echo "  Then claim the agent as the service user:"
-  echo "    sudo -u playit /opt/playit/playit"
+  echo "    sudo -u playit /opt/playit/playit \\"
+  echo "      --secret_path /etc/playit/playit.toml"
   echo ""
   echo "  Finally, enable the service:"
   echo "    sudo systemctl enable --now playit"

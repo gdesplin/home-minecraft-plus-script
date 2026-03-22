@@ -294,8 +294,13 @@ This script:
 > one you claimed, causing tunnels to appear "online" on the dashboard but receive no traffic.
 
 ```bash
-sudo -u playit /opt/playit/playit
+sudo -u playit /opt/playit/playit --secret_path /etc/playit/playit.toml
 ```
+
+The `--secret_path` flag writes the secret key to `/etc/playit/playit.toml` — the same
+path the vendor systemd unit reads at runtime. Without it, the key lands in the `playit`
+user's home-directory config and the service starts with a different identity (tunnel
+appears online but receives no traffic).
 
 The agent will print a URL. Open it in a browser and log in (or create a free account) at
 [playit.gg](https://playit.gg). Once claimed, configure your tunnels on the dashboard:
@@ -361,7 +366,7 @@ sudo systemctl stop playit
 | Problem | Solution |
 |---------|----------|
 | Agent not starting | `sudo systemctl status playit` — check for errors |
-| Can't claim tunnel | Re-run `sudo -u playit /opt/playit/playit` — do **not** run as your normal user |
+| Can't claim tunnel | Re-run `sudo -u playit /opt/playit/playit --secret_path /etc/playit/playit.toml` — do **not** run as your normal user |
 | Connection refused by players | Make sure Minecraft is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
 | Tunnel shows offline | Restart the service: `sudo systemctl restart playit` |
 | Wrong tunnel address | Check the dashboard at [playit.gg](https://playit.gg) for your current address |
@@ -389,7 +394,7 @@ ls -l /opt/playit/playit
 
 ```bash
 # Claim / interactive run
-sudo -u playit /opt/playit/playit
+sudo -u playit /opt/playit/playit --secret_path /etc/playit/playit.toml
 
 # Check version
 /opt/playit/playit --version
@@ -551,7 +556,7 @@ runs as:
 
 ```bash
 # e.g. if the service runs as 'playit':
-sudo -u playit /opt/playit/playit
+sudo -u playit /opt/playit/playit --secret_path /etc/playit/playit.toml
 # open the URL, claim, set tunnel local address to 127.0.0.1:25565, Ctrl+C
 sudo systemctl restart playit
 ```
@@ -596,14 +601,19 @@ agent, and set the tunnel local address to `127.0.0.1:25565`.
 lines and players cannot connect.
 
 **Cause:** the tunnel on the dashboard is bound to a different secret key than the one
-the running service is using. This happens when `/opt/playit/playit` was run as your normal
-user at some point, creating `~/.config/playit_gg/playit.toml` with a separate identity.
+the running service is using. This happens when:
+
+1. `/opt/playit/playit` was run as your normal user (creating `~/.config/playit_gg/playit.toml`
+   with a separate identity), **or**
+2. The claim was run **without** `--secret_path /etc/playit/playit.toml`, so the secret
+   was written to the `playit` user's home config instead of `/etc/playit/playit.toml`
+   where the vendor systemd unit expects it.
 
 **Diagnosis:**
 
 ```bash
 # Which key is the running service using?
-# (sudo needed: /etc/playit/ is owned root:playit with 750 permissions)
+# (sudo needed: /etc/playit/ is owned playit:playit with 750 permissions)
 sudo cat /etc/playit/playit.toml
 
 # Is there a second identity from a previous interactive run?
@@ -656,7 +666,7 @@ sudo bash bin/setup-playit.sh
 
 # 6. Claim as the service user (one identity only)
 # NOTE: 'which playit' returns nothing — always use the full path
-sudo -u playit /opt/playit/playit
+sudo -u playit /opt/playit/playit --secret_path /etc/playit/playit.toml
 # → open the URL, claim, set tunnel local address to 127.0.0.1:25565, Ctrl+C
 
 # 7. Enable and start

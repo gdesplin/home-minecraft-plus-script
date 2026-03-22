@@ -104,7 +104,7 @@ else
   ok "/etc/playit already exists."
 fi
 
-chown root:playit /etc/playit
+chown playit:playit /etc/playit
 chmod 750 /etc/playit
 
 # ── Install systemd drop-in override (do NOT overwrite vendor unit) ───────────
@@ -135,11 +135,17 @@ echo ""
 echo "  ┌─ NEXT STEPS ──────────────────────────────────────────────────────────┐"
 echo "  │                                                                       │"
 echo "  │  1. Claim the agent ONE TIME as the service user:                     │"
-echo "  │       sudo -u playit /opt/playit/playit                              │"
+echo "  │       sudo -u playit /opt/playit/playit \\                           │"
+echo "  │         --secret_path /etc/playit/playit.toml                        │"
 echo "  │                                                                       │"
 echo "  │     NOTE: 'which playit' will return nothing — the APT package       │"
 echo "  │     (v0.17.1) installs the binary at /opt/playit/playit only.        │"
 echo "  │     Always use the full path for manual commands.                     │"
+echo "  │                                                                       │"
+echo "  │     The --secret_path flag ensures the secret key is written to       │"
+echo "  │     /etc/playit/playit.toml — the same path the vendor systemd unit  │"
+echo "  │     reads at runtime. Without it the service starts with a different  │"
+echo "  │     identity and the tunnel receives no traffic.                      │"
 echo "  │                                                                       │"
 echo "  │     ⚠  IMPORTANT: do NOT run the agent as your normal login.         │"
 echo "  │     Running it as your own user writes a separate secret key to       │"
