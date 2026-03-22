@@ -362,7 +362,6 @@ runs `setup-playit.sh` immediately afterward.
 ```bash
 # 1. Remove the plugin JAR and data
 sudo rm -rf /opt/minecraft/data/plugins/PlayitGg*
-sudo rm -rf /opt/minecraft/data/plugins/PlayitGg
 
 # 2. Remove SPIGET_RESOURCES from .env (or remove 105566 from the list)
 sudo nano /opt/minecraft/.env
