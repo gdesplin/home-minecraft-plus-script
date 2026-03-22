@@ -273,12 +273,20 @@ sudo bash bin/setup-playit.sh
 
 This script:
 - Adds the official Playit.gg APT repository
-- Installs the `playit` agent
+- Installs the `playit` agent via APT
 - Creates a dedicated `playit` system user for security
+- Creates `/etc/playit/` — the canonical config directory (config lives at `/etc/playit/playit.toml`)
 - Sets up `/opt/playit/` as the agent's working directory
-- Installs the `playit.service` systemd unit
+- Writes a systemd drop-in override at `/etc/systemd/system/playit.service.d/override.conf`
+  to run the service as the `playit` user — **without** overwriting the vendor unit at
+  `/usr/lib/systemd/system/playit.service`
 
 ### First-Time Tunnel Claim (one-time)
+
+> ⚠ **Critical:** always claim the agent as the **`playit` service user**, never as your own login.
+> Running `playit` as your normal user writes a separate secret key to `~/.config/playit_gg/`
+> and registers a duplicate agent identity. The service then runs as a different agent than the
+> one you claimed, causing tunnels to appear "online" on the dashboard but receive no traffic.
 
 ```bash
 sudo -u playit playit
@@ -287,10 +295,14 @@ sudo -u playit playit
 The agent will print a URL. Open it in a browser and log in (or create a free account) at
 [playit.gg](https://playit.gg). Once claimed, configure your tunnels on the dashboard:
 
-| Tunnel type | Port | Purpose |
-|-------------|------|---------|
-| TCP | 25565 | Minecraft Java Edition |
-| UDP | 19132 | Minecraft Bedrock / Geyser (optional) |
+| Tunnel type | Port | Local address | Purpose |
+|-------------|------|---------------|---------|
+| TCP | 25565 | `127.0.0.1:25565` | Minecraft Java Edition |
+| UDP | 19132 | `127.0.0.1:19132` | Minecraft Bedrock / Geyser (optional) |
+
+> **Use `127.0.0.1` as the local address** (not the Docker container's internal IP like
+> `172.18.0.2`). The Playit agent runs on the host and reaches Minecraft through Docker's
+> published port on `127.0.0.1`.
 
 After claiming, press **Ctrl+C** to exit.
 
@@ -300,7 +312,15 @@ After claiming, press **Ctrl+C** to exit.
 sudo systemctl enable --now playit
 ```
 
-The agent will now start automatically on every boot.
+The agent will now start automatically on every boot. Verify it is using a single identity:
+
+```bash
+sudo cat /etc/playit/playit.toml
+sudo tail -f /var/log/playit/playit.log
+```
+
+The log should show `tunnel running, 1 tunnels registered` (not zero, and not a repeated
+auth-failure loop).
 
 ### Player Connection
 
@@ -322,6 +342,9 @@ The exact address is shown on your [playit.gg dashboard](https://playit.gg).
 sudo systemctl status playit
 
 # View live logs
+sudo tail -f /var/log/playit/playit.log
+
+# Follow systemd journal
 sudo journalctl -u playit -f
 
 # Restart the tunnel
@@ -336,10 +359,77 @@ sudo systemctl stop playit
 | Problem | Solution |
 |---------|----------|
 | Agent not starting | `sudo systemctl status playit` — check for errors |
-| Can't claim tunnel | Visit [playit.gg](https://playit.gg), log in, and re-run `sudo -u playit playit` |
-| Connection refused by players | Make sure the Minecraft server is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
+| Can't claim tunnel | Re-run `sudo -u playit playit` — do **not** run as your normal user |
+| Connection refused by players | Make sure Minecraft is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
 | Tunnel shows offline | Restart the service: `sudo systemctl restart playit` |
 | Wrong tunnel address | Check the dashboard at [playit.gg](https://playit.gg) for your current address |
+| **Tunnel online, but no traffic / connection attempts** | You have duplicate agent identities — see below |
+
+#### Duplicate Agent Identity (tunnel online, no traffic)
+
+**Symptom:** the Playit dashboard shows the tunnel as "online" and `playit.log` says
+`tunnel running, 1 tunnels registered`, but external connection attempts produce no log
+lines and players cannot connect.
+
+**Cause:** the tunnel on the dashboard is bound to a different secret key than the one
+the running service is using. This happens when `playit` was run as your normal user at
+some point, creating `~/.config/playit_gg/playit.toml` with a separate identity.
+
+**Diagnosis:**
+
+```bash
+# Which key is the running service using?
+# (sudo needed: /etc/playit/ is owned root:playit with 750 permissions)
+sudo cat /etc/playit/playit.toml
+
+# Is there a second identity from a previous interactive run?
+cat ~/.config/playit_gg/playit.toml 2>/dev/null || echo "(no user-level config)"
+```
+
+If the `secret_key` values differ, the service is running with the wrong identity.
+
+**Fix:** do a [Full Reset](#full-reset-procedure) below to start clean.
+
+Also check your [Playit.gg dashboard → Agents](https://playit.gg): you should see only
+**one** agent listed. Delete any stale/duplicate agents.
+
+#### Full Reset Procedure
+
+Use this to wipe all Playit state and start fresh with a single clean identity.
+
+```bash
+# 1. Stop and disable the service
+sudo systemctl stop playit || true
+sudo systemctl disable playit || true
+
+# 2. Purge the APT package (removes vendor unit and binary)
+sudo apt-get remove --purge -y playit || true
+sudo apt-get autoremove -y
+
+# 3. Delete ALL Playit state (config, logs, drop-in, user-level identity)
+sudo rm -rf /etc/playit
+sudo rm -rf /var/log/playit
+sudo rm -rf /opt/playit
+sudo rm -rf /etc/systemd/system/playit.service.d
+rm -rf ~/.config/playit_gg
+
+# 4. Reload systemd
+sudo systemctl daemon-reload
+
+# 5. Re-install
+sudo bash bin/setup-playit.sh
+
+# 6. Claim as the service user (one identity only)
+sudo -u playit playit
+# → open the URL, claim, set tunnel local address to 127.0.0.1:25565, Ctrl+C
+
+# 7. Enable and start
+sudo systemctl enable --now playit
+sudo tail -f /var/log/playit/playit.log
+```
+
+After the reset, go to the [Playit.gg dashboard](https://playit.gg) → **Agents** and remove
+any stale agents from previous installs so only the new one remains.
 
 ---
 
@@ -624,7 +714,7 @@ sudo docker exec mc rcon-cli "whitelist add .Steve"
 │   ├── setup-playit.sh     # Playit.gg tunnel (CGNAT support)
 │   └── status.sh           # Health dashboard
 ├── config/
-│   └── playit.service      # Systemd service unit for Playit.gg agent
+│   └── playit.service      # LEGACY — historical reference only (not installed by setup-playit.sh)
 ├── minecraft/
 │   ├── compose.yml         # Docker Compose for Minecraft
 │   └── .env.example        # Minecraft environment template

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # setup-playit.sh — Install and configure Playit.gg tunnel for CGNAT scenarios
 # Idempotent: safe to run multiple times.
+#
+# This script follows the standard Ubuntu install path:
+#   - Installs playit via the official APT repository
+#   - Uses the vendor-provided systemd unit (no overwrite of /usr/lib/systemd/system/playit.service)
+#   - Places a drop-in override at /etc/systemd/system/playit.service.d/override.conf
+#   - Keeps a single canonical config location at /etc/playit/playit.toml
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [ OK ]  $*"; }
@@ -82,44 +85,80 @@ fi
 chown playit:playit /opt/playit
 chmod 750 /opt/playit
 
-# ── Install systemd service ───────────────────────────────────────────────────
-SERVICE_SRC="${REPO_ROOT}/config/playit.service"
-SERVICE_DEST="/etc/systemd/system/playit.service"
-
-if [[ ! -f "${SERVICE_SRC}" ]]; then
-  warn "Service file not found at ${SERVICE_SRC}. Skipping systemd setup."
+# ── Create canonical config directory ────────────────────────────────────────
+# The playit APT package expects its config at /etc/playit/playit.toml.
+if [[ ! -d /etc/playit ]]; then
+  info "Creating /etc/playit config directory..."
+  mkdir -p /etc/playit
+  ok "Directory created."
 else
-  info "Installing systemd service..."
-  cp "${SERVICE_SRC}" "${SERVICE_DEST}"
-  systemctl daemon-reload
-  ok "Systemd service installed."
+  ok "/etc/playit already exists."
 fi
+
+chown root:playit /etc/playit
+chmod 750 /etc/playit
+
+# ── Install systemd drop-in override (do NOT overwrite vendor unit) ───────────
+# The official playit APT package ships its own unit at:
+#   /usr/lib/systemd/system/playit.service
+# We use a drop-in override to enforce the correct user/group and working
+# directory without replacing the vendor unit.
+DROPIN_DIR="/etc/systemd/system/playit.service.d"
+DROPIN_FILE="${DROPIN_DIR}/override.conf"
+
+info "Installing systemd drop-in override..."
+mkdir -p "${DROPIN_DIR}"
+cat > "${DROPIN_FILE}" << 'EOF'
+[Service]
+# Run as the dedicated playit system user, not root.
+User=playit
+Group=playit
+WorkingDirectory=/opt/playit
+EOF
+ok "Drop-in override written to ${DROPIN_FILE}."
+
+systemctl daemon-reload
+ok "systemd configuration reloaded."
 
 echo ""
 echo "✓ Playit.gg installation complete."
 echo ""
 echo "  ┌─ NEXT STEPS ──────────────────────────────────────────────────────────┐"
 echo "  │                                                                       │"
-echo "  │  1. Run the initial claim wizard (one-time setup):                    │"
+echo "  │  1. Claim the agent ONE TIME as the service user:                     │"
 echo "  │       sudo -u playit playit                                           │"
+echo "  │                                                                       │"
+echo "  │     ⚠  IMPORTANT: do NOT run 'playit' as your normal login.          │"
+echo "  │     Running it as your own user writes a separate secret key to       │"
+echo "  │     ~/.config/playit_gg/ and creates a duplicate agent identity,      │"
+echo "  │     which causes tunnels to show online but receive no traffic.       │"
 echo "  │                                                                       │"
 echo "  │  2. Open the printed URL in a browser and log in to playit.gg.        │"
 echo "  │                                                                       │"
 echo "  │  3. Add tunnels on the playit.gg dashboard:                           │"
-echo "  │       • TCP  25565  →  Minecraft Java Edition                         │"
-echo "  │       • UDP  19132  →  Minecraft Bedrock / Geyser (optional)          │"
+echo "  │       • TCP  25565  →  local address: 127.0.0.1:25565                 │"
+echo "  │       • UDP  19132  →  local address: 127.0.0.1:19132  (Bedrock)      │"
+echo "  │                                                                       │"
+echo "  │     ⚠  Use 127.0.0.1 (not the Docker container IP) so the host-side  │"
+echo "  │     playit agent can reach Docker's published port.                   │"
 echo "  │                                                                       │"
 echo "  │  4. Exit the wizard (Ctrl+C), then enable the service:                │"
 echo "  │       sudo systemctl enable --now playit                              │"
 echo "  │                                                                       │"
-echo "  │  5. Share your tunnel address with players:                           │"
+echo "  │  5. Verify the agent starts with a single identity:                   │"
+echo "  │       sudo cat /etc/playit/playit.toml                                │"
+echo "  │       sudo tail -f /var/log/playit/playit.log                         │"
+echo "  │                                                                       │"
+echo "  │  6. Share your tunnel address with players:                           │"
 echo "  │       yourname.joinplayit.gg                                          │"
 echo "  │                                                                       │"
 echo "  └───────────────────────────────────────────────────────────────────────┘"
 echo ""
 echo "  Useful commands:"
 echo "    sudo systemctl status playit"
+echo "    sudo tail -f /var/log/playit/playit.log"
 echo "    sudo journalctl -u playit -f"
 echo ""
-echo "  See the README for full Playit.gg documentation."
+echo "  See the README for full Playit.gg documentation, including the"
+echo "  'Full reset' procedure if you need to start over."
 echo ""
