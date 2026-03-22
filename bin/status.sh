@@ -46,6 +46,40 @@ else
   echo "     Run: sudo bash bin/setup-minecraft.sh"
 fi
 
+# ── Playit.gg tunnel ─────────────────────────────────────────────────────────
+hdr "Playit.gg Tunnel"
+if systemctl is-active --quiet playit 2>/dev/null; then
+  ok "Playit service is running."
+  PLAYIT_BIN="/opt/playit/playit"
+  if [[ -x "${PLAYIT_BIN}" ]]; then
+    PLAYIT_VER=$("${PLAYIT_BIN}" --version 2>/dev/null || echo "unknown")
+    echo "     Version  : ${PLAYIT_VER}"
+  fi
+  # Show the active ExecStart so the user can verify binary path and flags
+  EXEC_START=$(systemctl show playit -p ExecStart --value 2>/dev/null \
+    | sed 's/^.*path=//;s/ ;.*$//' || echo "unknown")
+  echo "     ExecStart: ${EXEC_START}"
+  # Quick loopback reachability check for the Minecraft port
+  if command -v nc &>/dev/null; then
+    if nc -z -w2 127.0.0.1 25565 2>/dev/null; then
+      ok "127.0.0.1:25565 is reachable from the host (Docker port is published)."
+    else
+      warn "127.0.0.1:25565 is NOT reachable — Minecraft may not be running or the port is not published."
+      echo "     Check: sudo docker compose -f /opt/minecraft/compose.yml ps"
+      echo "     Check: sudo docker ps --format 'table {{.Names}}\\t{{.Ports}}'"
+    fi
+  fi
+elif systemctl list-unit-files playit.service &>/dev/null 2>&1 \
+    && systemctl list-unit-files playit.service | grep -q playit; then
+  warn "Playit service is installed but NOT running."
+  echo "     Run: sudo systemctl start playit"
+  echo "     Check: sudo systemctl status playit"
+  echo "     Logs: sudo journalctl -u playit -n 30"
+else
+  warn "Playit service not found (not installed or not in use)."
+  echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"
+fi
+
 # ── DuckDNS ───────────────────────────────────────────────────────────────────
 hdr "DuckDNS"
 if systemctl is-active --quiet duckdns.timer 2>/dev/null; then
