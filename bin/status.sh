@@ -24,64 +24,32 @@ else
   echo "     Run: sudo systemctl start docker"
 fi
 
-# ── Minecraft container ───────────────────────────────────────────────────────
+# ── Minecraft (systemd service) ───────────────────────────────────────────────
 hdr "Minecraft Server"
-if [[ -f "${MC_DIR}/compose.yml" ]]; then
-  MC_STATUS=$(docker compose -f "${MC_DIR}/compose.yml" ps --format json 2>/dev/null || echo "")
-  if docker compose -f "${MC_DIR}/compose.yml" ps 2>/dev/null | grep -q "running\|Up"; then
-    ok "Minecraft container is running."
-    # Try RCON to get player count
-    if docker exec mc rcon-cli "list" &>/dev/null 2>&1; then
-      PLAYER_LIST=$(docker exec mc rcon-cli "list" 2>/dev/null || echo "RCON unavailable")
-      echo "     ${PLAYER_LIST}"
-    else
-      echo "     RCON: not available (container may still be starting)"
-    fi
-  else
-    fail "Minecraft container is NOT running."
-    echo "     Run: cd ${MC_DIR} && sudo docker compose up -d"
-  fi
-else
-  warn "Minecraft not set up yet (${MC_DIR}/compose.yml not found)."
+if [[ ! -f "/etc/systemd/system/minecraft.service" ]]; then
+  warn "minecraft.service not installed."
   echo "     Run: sudo bash bin/setup-minecraft.sh"
+elif systemctl is-active --quiet minecraft.service 2>/dev/null; then
+  ok "minecraft.service is running."
+  MC_LOG=$(journalctl -u minecraft -n 1 --no-pager --output=cat 2>/dev/null || echo "(no log yet)")
+  echo "     Last log : ${MC_LOG}"
+else
+  fail "minecraft.service is NOT running."
+  echo "     Run: sudo systemctl start minecraft.service"
 fi
 
-# ── Playit.gg plugin ──────────────────────────────────────────────────────────
-hdr "Playit.gg Plugin"
-PLAYIT_PLUGIN_DIR="/opt/minecraft/data/plugins"
-if ls "${PLAYIT_PLUGIN_DIR}"/PlayitGg*.jar &>/dev/null 2>&1 \
-    || ls "${PLAYIT_PLUGIN_DIR}"/playit*.jar &>/dev/null 2>&1; then
-  ok "Playit.gg plugin JAR found."
-  PLAYIT_JAR=$(find "${PLAYIT_PLUGIN_DIR}" -maxdepth 1 \( -name 'PlayitGg*.jar' -o -name 'playit*.jar' \) -print -quit 2>/dev/null)
-  echo "     Plugin: $(basename "${PLAYIT_JAR}")"
-  if [[ -d "${PLAYIT_PLUGIN_DIR}/PlayitGg" ]]; then
-    ok "Plugin data directory exists."
-  else
-    warn "Plugin data directory not found — plugin may not have run yet."
-  fi
-  # Check if the env var is set
-  ENV_FILE="/opt/minecraft/.env"
-  if [[ -f "${ENV_FILE}" ]] && grep -q "^PLUGINS=.*playit-minecraft-plugin" "${ENV_FILE}" 2>/dev/null; then
-    ok "PLUGINS includes Playit.gg download URL."
-  elif [[ -f "${ENV_FILE}" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "${ENV_FILE}" 2>/dev/null; then
-    warn "SPIGET_RESOURCES includes Playit.gg (105566) but may be unreliable."
-    echo "     Consider running: sudo bash bin/setup-playit.sh  (switches to direct download)"
-  else
-    warn "Playit.gg plugin is not configured for auto-download."
-  fi
+# ── Playit.gg agent ───────────────────────────────────────────────────────────
+hdr "Playit.gg Agent"
+if [[ ! -f "/etc/systemd/system/playit.service" ]]; then
+  warn "playit.service not installed."
+  echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"
+elif systemctl is-active --quiet playit.service 2>/dev/null; then
+  ok "playit.service is running."
+  journalctl -u playit -n 3 --no-pager --output=cat 2>/dev/null \
+    | while IFS= read -r line; do echo "     ${line}"; done || true
 else
-  if [[ -f "/opt/minecraft/.env" ]] && grep -q "^PLUGINS=.*playit-minecraft-plugin" "/opt/minecraft/.env" 2>/dev/null; then
-    warn "Playit.gg is configured in .env but plugin JAR not found yet."
-    echo "     The plugin will be downloaded on next container start."
-    echo "     Run: cd /opt/minecraft && sudo docker compose up -d"
-  elif [[ -f "/opt/minecraft/.env" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "/opt/minecraft/.env" 2>/dev/null; then
-    warn "Playit.gg is configured via SPIGET_RESOURCES but plugin JAR not found."
-    echo "     Spiget downloads can be unreliable. Re-run setup to switch to direct download:"
-    echo "     sudo bash bin/setup-playit.sh"
-  else
-    warn "Playit.gg plugin not installed."
-    echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"
-  fi
+  warn "playit.service is installed but NOT running."
+  echo "     Run: sudo systemctl start playit.service"
 fi
 
 # ── DuckDNS ───────────────────────────────────────────────────────────────────

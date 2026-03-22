@@ -2,7 +2,7 @@
 
 Idempotent bootstrap for a headless **Ubuntu 24.04 LTS** mini-PC that runs:
 
-- A **Paper Minecraft server** in Docker (`itzg/minecraft-server`, Java 21, 4 GB RAM, ~10 players)
+- A **Paper Minecraft server** running bare-metal (no Docker) under a dedicated `minecraft` system user, managed by `minecraft.service` (systemd)
 - A **Kamal-ready Docker host** for Rails apps
 - **DuckDNS** dynamic-DNS updater (systemd service + timer)
 - **Restic backups** of the Minecraft world (hourly systemd timer, configurable retention)
@@ -94,7 +94,7 @@ Run scripts in order. Each is **idempotent** — safe to re-run if something cha
 # 1. Host basics (packages, locale, timezone)
 sudo bash bin/setup-host.sh
 
-# 2. Docker CE + Compose plugin
+# 2. Docker CE + Compose plugin (still needed for Kamal)
 sudo bash bin/setup-docker.sh
 
 # 3. UFW firewall
@@ -107,32 +107,37 @@ sudo bash bin/setup-fail2ban.sh
 #    Skip this step if you are using Playit.gg (see CGNAT section)
 sudo bash bin/setup-duckdns.sh
 
-# 6. Minecraft server (configure minecraft/.env first — see below)
+# 6. Minecraft server (bare-metal, no Docker required)
 sudo bash bin/setup-minecraft.sh
 
 # 7. Restic backups (configure backups/restic.env first — see below)
 sudo bash bin/setup-backups.sh
 
-# Optional: Playit.gg plugin (required when behind CGNAT — see below)
+# Optional: Playit.gg agent (required when behind CGNAT — see below)
 sudo bash bin/setup-playit.sh
 ```
 
 ### Configure Environment Files
 
-Before running steps 5–7, copy and edit the example env files:
+Before running steps 5 and 7, copy and edit the example env files:
 
 ```bash
 # DuckDNS
 cp duckdns/.env.example duckdns/.env
 nano duckdns/.env         # fill in DUCKDNS_TOKEN and DUCKDNS_SUBDOMAIN
 
-# Minecraft (optional overrides; defaults are sensible)
-cp minecraft/.env.example minecraft/.env
-nano minecraft/.env       # set EULA=TRUE (required), optionally MC_VERSION
-
 # Restic backups
 cp backups/restic.env.example backups/restic.env
 nano backups/restic.env   # fill in RESTIC_REPOSITORY and RESTIC_PASSWORD
+```
+
+The Minecraft server no longer uses a `.env` file. All server settings are in
+`/opt/minecraft/data/server.properties` (written automatically on first run by
+`setup-minecraft.sh`). Edit that file directly and restart the service:
+
+```bash
+sudo nano /opt/minecraft/data/server.properties
+sudo systemctl restart minecraft.service
 ```
 
 ---
@@ -265,9 +270,9 @@ connecting to your server) through traditional port forwarding.
 It routes traffic through Playit's servers so your players can connect even when port forwarding
 is impossible. Latency impact is minimal (typically under 10 ms).
 
-This setup uses the [Playit.gg Paper/Spigot plugin](https://www.spigotmc.org/resources/playit-gg.105566/)
-which runs inside the Minecraft server itself — no separate system service, APT package, or
-dedicated user is required.
+This setup installs the official **standalone `playit` agent binary** directly on the host as its
+own systemd service (`playit.service`). The agent tunnels traffic to `localhost:25565`, so no
+Docker networking layer is involved — connections are reliable and straightforward.
 
 ### Installation
 
@@ -276,30 +281,29 @@ sudo bash bin/setup-playit.sh
 ```
 
 This script:
-- Adds a `PLUGINS` URL to `/opt/minecraft/.env` so the Docker image
-  auto-downloads the Playit.gg plugin from [GitHub](https://github.com/playit-cloud/playit-minecraft-plugin/releases)
-- Restarts the Minecraft container to pick up the change
-- The plugin prints a claim URL in the server console on first run
-
-> **Note:** The plugin requires a Paper or Spigot server (the default `TYPE=PAPER` works).
-> Vanilla, Fabric, and Forge servers are not supported.
+- Downloads the `playit` binary from [GitHub](https://github.com/playit-cloud/playit-agent/releases)
+  and installs it at `/usr/local/bin/playit`
+- Creates a dedicated `playit` system user
+- Creates `/etc/playit/` for the agent's configuration and secret
+- Writes and enables `playit.service` (systemd)
+- Starts the service and shows the initial log output (including the claim URL)
 
 ### First-Time Tunnel Claim (one-time)
 
-After the container starts, watch the server logs for the claim URL:
+After running `setup-playit.sh`, watch the output for the claim URL. You can also follow live logs:
 
 ```bash
-sudo docker compose -f /opt/minecraft/compose.yml logs -f
+journalctl -u playit -f
 ```
 
 Look for a line like:
 
 ```
-[playit-gg] Visit https://playit.gg/claim/xxxxx to claim your agent
+Visit https://playit.gg/claim/xxxxx to claim your agent
 ```
 
 Open the URL in a browser and log in (or create a free account) at
-[playit.gg](https://playit.gg). The plugin automatically creates a TCP tunnel for
+[playit.gg](https://playit.gg). The agent automatically creates a TCP tunnel for
 port 25565 (Java Edition). For Bedrock crossplay (UDP 19132), add a tunnel on the
 [Playit.gg dashboard](https://playit.gg).
 
@@ -316,37 +320,36 @@ The exact address is shown on your [playit.gg dashboard](https://playit.gg).
 > **Note:** DuckDNS is **not needed** for Minecraft when using Playit.gg. You can keep
 > DuckDNS if you use it for other services (e.g. Rails apps via Kamal).
 
-### Managing the Plugin
+### Managing the Agent
 
-The plugin runs as part of the Minecraft server — no separate service to manage.
+The agent runs as its own systemd service, independent of the Minecraft server.
 
 ```bash
-# View server logs (including Playit.gg messages)
-sudo docker compose -f /opt/minecraft/compose.yml logs -f
+# View agent logs (including claim URL on first run)
+journalctl -u playit -f
 
-# Restart the server (also restarts the plugin)
-cd /opt/minecraft && sudo docker compose restart
+# Restart the agent
+sudo systemctl restart playit.service
 
-# Access the server console
-sudo docker exec -it mc rcon-cli
+# Check agent status
+sudo systemctl status playit.service
 ```
 
-Plugin configuration is stored in `/opt/minecraft/data/plugins/PlayitGg/`.
+Agent configuration is stored in `/etc/playit/`.
 
 ### Playit.gg Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| Plugin not loading | Check server type is PAPER or SPIGOT: `grep TYPE /opt/minecraft/.env` |
-| Plugin JAR not downloaded | Re-run `sudo bash bin/setup-playit.sh`, then restart the container |
-| No claim URL in logs | Wait 60–90 s for the server to fully start; check logs again |
-| Connection refused by players | Make sure Minecraft is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
-| Tunnel shows offline | Restart the server: `cd /opt/minecraft && sudo docker compose restart` |
+| No claim URL in logs | Wait a few seconds; run `journalctl -u playit -n 50 --no-pager` |
+| Agent not starting | Check `sudo systemctl status playit.service` and `journalctl -u playit` |
+| Connection refused by players | Make sure Minecraft is running: `sudo systemctl status minecraft.service` |
+| Tunnel shows offline | Restart the agent: `sudo systemctl restart playit.service` |
 | Wrong tunnel address | Check the dashboard at [playit.gg](https://playit.gg) for your current address |
 
 ### Full Reset Procedure
 
-Use this to wipe all Playit plugin state and start fresh.
+Use this to wipe all Playit agent state and start fresh.
 
 **Option A — use the reset script (recommended):**
 
@@ -354,20 +357,25 @@ Use this to wipe all Playit plugin state and start fresh.
 sudo bash bin/reset-playit.sh
 ```
 
-The script prompts for confirmation, removes the plugin and its data, and optionally
-runs `setup-playit.sh` immediately afterward.
+The script prompts for confirmation, stops and removes the service, deletes the agent secret
+(`/etc/playit/`), removes the binary, and optionally runs `setup-playit.sh` immediately afterward.
 
 **Option B — manual steps:**
 
 ```bash
-# 1. Remove the plugin JAR and data
-sudo rm -rf /opt/minecraft/data/plugins/PlayitGg*
+# 1. Stop and disable the service
+sudo systemctl stop playit.service
+sudo systemctl disable playit.service
 
-# 2. Remove the Playit.gg URL from PLUGINS in .env (or comment it out)
-sudo nano /opt/minecraft/.env
+# 2. Remove the unit file and reload systemd
+sudo rm /etc/systemd/system/playit.service
+sudo systemctl daemon-reload
 
-# 3. Restart the server
-cd /opt/minecraft && sudo docker compose up -d --force-recreate
+# 3. Remove the agent secret (forces re-claim on reinstall)
+sudo rm -rf /etc/playit/
+
+# 4. Remove the binary
+sudo rm -f /usr/local/bin/playit
 ```
 
 After the reset, go to the [Playit.gg dashboard](https://playit.gg) → **Agents** and remove
@@ -396,46 +404,51 @@ Players connect to: `myhomemc.duckdns.org:25565`
 
 ## Starting Minecraft
 
+The Minecraft server is managed by systemd. After running `setup-minecraft.sh` the service
+starts automatically and restarts on failure.
+
 ```bash
-cd /opt/minecraft
-sudo docker compose up -d
+# Check status
+sudo systemctl status minecraft.service
 
 # Follow logs
-sudo docker compose logs -f
+journalctl -u minecraft -f
 ```
 
-The first start downloads the Paper server jar — this may take a minute or two.
+The first start downloads and initializes the Paper server — this may take a minute or two.
 
-> **EULA:** You must set `EULA=TRUE` in `minecraft/.env` (or `/opt/minecraft/.env`). By setting
-> this you agree to the [Minecraft EULA](https://aka.ms/MinecraftEULA).
+> **EULA:** The setup script automatically writes `eula=true` to
+> `/opt/minecraft/data/eula.txt`. By running `setup-minecraft.sh` you agree to the
+> [Minecraft EULA](https://aka.ms/MinecraftEULA).
 
 ### Manage the Server
 
 ```bash
-# Send a console command via RCON
-sudo docker exec mc rcon-cli "list"
+# Start / stop / restart
+sudo systemctl start minecraft.service
+sudo systemctl stop minecraft.service
+sudo systemctl restart minecraft.service
 
-# Attach to the console (Ctrl+P, Ctrl+Q to detach)
-sudo docker attach mc
-
-# Stop the server cleanly
-cd /opt/minecraft && sudo docker compose stop
-
-# Restart
-cd /opt/minecraft && sudo docker compose restart
+# Send a console command via RCON (requires mcrcon or similar)
+# mcrcon -H 127.0.0.1 -P 25575 -p changeme_rcon_secret "list"
 ```
 
 ### Op a Player
 
-```bash
-sudo docker exec mc rcon-cli "op YourUsername"
+Edit `/opt/minecraft/data/ops.json` or connect via RCON and run:
+
+```
+op YourUsername
 ```
 
 ---
 
 ## Bedrock Edition Support (Optional)
 
-[Geyser](https://geysermc.org/) + [Floodgate](https://wiki.geysermc.org/floodgate/) are supported by the `itzg/minecraft-server` image and are **enabled by default in this setup** (via `GEYSER_ENABLED=true` and `FLOODGATE_ENABLED=true` in `.env.example`). They allow players on Xbox, Switch, mobile (iOS/Android), and Windows 10/11 Bedrock Edition to join your Java Paper server.
+[Geyser](https://geysermc.org/) + [Floodgate](https://wiki.geysermc.org/floodgate/) allow players
+on Xbox, Switch, mobile (iOS/Android), and Windows 10/11 Bedrock Edition to join your Java Paper
+server. To use them, install the Geyser-Spigot and Floodgate plugin JARs into
+`/opt/minecraft/data/plugins/` and restart the server.
 
 ### How to Connect (Bedrock Players)
 
@@ -454,37 +467,13 @@ Bedrock players join with a prefix before their username (default prefix: `.`).
 
 For example, a Bedrock player with gamertag `Steve` appears as `.Steve` in-game.
 
-To whitelist a Bedrock player, include the prefixed name:
+To whitelist a Bedrock player, include the prefixed name in
+`/opt/minecraft/data/whitelist.json` or via RCON:
 
-```env
-# In minecraft/.env
-WHITELIST=JavaPlayer,.BedrockPlayer
-ENFORCE_WHITELIST=true
 ```
-
-Or via RCON at runtime (no restart needed):
-
-```bash
-sudo docker exec mc rcon-cli "whitelist add .BedrockPlayer"
-sudo docker exec mc rcon-cli "whitelist reload"
+whitelist add .BedrockPlayer
+whitelist reload
 ```
-
-### Disabling Bedrock Support
-
-If you don't need Bedrock crossplay, set these in `minecraft/.env`:
-
-```env
-GEYSER_ENABLED=false
-FLOODGATE_ENABLED=false
-```
-
-Then restart the container:
-
-```bash
-cd /opt/minecraft && sudo docker compose restart
-```
-
-You can also skip forwarding UDP 19132 on your router in this case.
 
 ### Known Limitations
 
@@ -501,8 +490,9 @@ sudo bash bin/status.sh
 ```
 
 This shows:
-- Docker service status
-- Minecraft container status and online players
+- Docker service status (still used for Kamal)
+- Minecraft systemd service status and last log line
+- Playit.gg agent status and recent log lines
 - DuckDNS timer status
 - Backup timer status and last backup time
 - UFW status
@@ -521,9 +511,9 @@ See [`backups/README.md`](backups/README.md) for full documentation.
 sudo restic -r <RESTIC_REPOSITORY> snapshots
 
 # Restore latest snapshot
-cd /opt/minecraft && sudo docker compose stop
+sudo systemctl stop minecraft.service
 sudo restic -r <RESTIC_REPOSITORY> restore latest --target /
-cd /opt/minecraft && sudo docker compose start
+sudo systemctl start minecraft.service
 ```
 
 ---
@@ -616,27 +606,15 @@ sudo dpkg-reconfigure -plow unattended-upgrades
    sudo ufw status | grep 19132
    ```
    You should see `19132/udp  ALLOW  Anywhere`.
-3. **Confirm Geyser is enabled** in `minecraft/.env`:
-   ```env
-   GEYSER_ENABLED=true
-   FLOODGATE_ENABLED=true
-   ```
-4. Restart the container after any `.env` change:
+3. **Confirm Geyser is installed** in `/opt/minecraft/data/plugins/`.
+4. Restart the server after any plugin changes:
    ```bash
-   cd /opt/minecraft && sudo docker compose restart
+   sudo systemctl restart minecraft.service
    ```
 
 ### Whitelist not working for Bedrock players
 
-Bedrock players use a prefixed username (default prefix: `.`). Make sure to include the prefix when whitelisting:
-
-```bash
-# Wrong (Java format)
-sudo docker exec mc rcon-cli "whitelist add Steve"
-
-# Correct (Bedrock format with Floodgate prefix)
-sudo docker exec mc rcon-cli "whitelist add .Steve"
-```
+Bedrock players use a prefixed username (default prefix: `.`). Make sure to include the prefix when whitelisting.
 
 ---
 
@@ -647,18 +625,17 @@ sudo docker exec mc rcon-cli "whitelist add .Steve"
 ├── README.md               # This file
 ├── bin/
 │   ├── setup-host.sh       # Base packages, locale, timezone
-│   ├── setup-docker.sh     # Docker CE + Compose plugin
+│   ├── setup-docker.sh     # Docker CE + Compose plugin (for Kamal)
 │   ├── setup-firewall.sh   # UFW rules
 │   ├── setup-fail2ban.sh   # fail2ban (sshd)
 │   ├── setup-duckdns.sh    # DuckDNS systemd service + timer
-│   ├── setup-minecraft.sh  # Minecraft compose stack
+│   ├── setup-minecraft.sh  # Bare-metal Paper server + minecraft.service
 │   ├── setup-backups.sh    # Restic + systemd backup timer
-│   ├── setup-playit.sh     # Playit.gg plugin (CGNAT support)
-│   ├── reset-playit.sh     # Remove Playit.gg plugin + data
+│   ├── setup-playit.sh     # Playit.gg agent (CGNAT support)
+│   ├── reset-playit.sh     # Remove Playit.gg agent + data
 │   └── status.sh           # Health dashboard
 ├── minecraft/
-│   ├── compose.yml         # Docker Compose for Minecraft
-│   └── .env.example        # Minecraft environment template
+│   └── README.md           # Minecraft bare-metal configuration notes
 ├── duckdns/
 │   └── .env.example        # DuckDNS credentials template
 └── backups/

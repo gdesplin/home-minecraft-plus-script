@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# setup-minecraft.sh — Deploy the Minecraft Paper server via Docker Compose
+# setup-minecraft.sh — Deploy the Paper Minecraft server bare-metal (no Docker)
 # Idempotent: safe to run multiple times.
-# Requires: docker (setup-docker.sh), compose plugin, and minecraft/.env
+# Manages the server via a systemd unit (minecraft.service).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MC_SRC="${REPO_ROOT}/minecraft"
-MC_DEST="/opt/minecraft"
-ENV_EXAMPLE="${MC_SRC}/.env.example"
-ENV_SRC="${MC_SRC}/.env"
-ENV_DEST="${MC_DEST}/.env"
+MC_HOME="/opt/minecraft"
+MC_DATA="${MC_HOME}/data"
+MC_BIN="${MC_HOME}/bin"
+MC_JAR="${MC_BIN}/paper.jar"
+MC_SERVICE="/etc/systemd/system/minecraft.service"
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [ OK ]  $*"; }
@@ -28,90 +28,163 @@ require_root
 
 echo ""
 echo "============================================"
-echo "  setup-minecraft.sh — Minecraft server"
+echo "  setup-minecraft.sh — Paper Minecraft"
+echo "  (bare-metal, systemd managed)"
 echo "============================================"
 echo ""
 
-# ── Verify Docker is available ────────────────────────────────────────────────
-if ! command -v docker &>/dev/null; then
-  err "Docker is not installed. Run setup-docker.sh first."
-  exit 1
-fi
-if ! docker compose version &>/dev/null; then
-  err "Docker Compose plugin not found. Run setup-docker.sh first."
-  exit 1
-fi
-
-# ── Create deployment directory ───────────────────────────────────────────────
-info "Creating deployment directory ${MC_DEST}..."
-mkdir -p "${MC_DEST}/data"
-ok "Directories ready."
-
-# ── Copy compose.yml ──────────────────────────────────────────────────────────
-info "Copying compose.yml to ${MC_DEST}..."
-cp -f "${MC_SRC}/compose.yml" "${MC_DEST}/compose.yml"
-ok "compose.yml copied."
-
-# ── Handle .env ───────────────────────────────────────────────────────────────
-if [[ ! -f "${ENV_DEST}" ]]; then
-  if [[ -f "${ENV_SRC}" ]]; then
-    info "Copying minecraft/.env to ${ENV_DEST}..."
-    cp "${ENV_SRC}" "${ENV_DEST}"
-    ok ".env copied."
-  else
-    info "No minecraft/.env found; copying .env.example as starting point..."
-    cp "${ENV_EXAMPLE}" "${ENV_DEST}"
-    warn "A placeholder .env was created at ${ENV_DEST}."
-    warn "You MUST set EULA=TRUE before the server will start."
-    warn "Edit ${ENV_DEST} now, then re-run this script."
-    echo ""
-    echo "  nano ${ENV_DEST}"
-    echo ""
-    exit 0
-  fi
+# ── 1. Install Java 21 ────────────────────────────────────────────────────────
+if ! java -version 2>&1 | grep -q "21\."; then
+  info "Installing OpenJDK 21..."
+  apt-get install -y -qq openjdk-21-jre-headless
+  ok "Java 21 installed."
 else
-  ok ".env already exists at ${ENV_DEST}. Skipping (will not overwrite secrets)."
+  ok "Java 21 already installed."
 fi
 
-# ── Confirm EULA is accepted ──────────────────────────────────────────────────
-if ! grep -qi "^EULA=TRUE" "${ENV_DEST}"; then
-  err "EULA=TRUE is not set in ${ENV_DEST}."
-  err "You must accept the Minecraft EULA: https://aka.ms/MinecraftEULA"
-  err "Add 'EULA=TRUE' to ${ENV_DEST} and re-run this script."
+# ── 2. Create minecraft system user ──────────────────────────────────────────
+if ! id minecraft &>/dev/null; then
+  info "Creating 'minecraft' system user..."
+  useradd -r -m -d "${MC_HOME}" minecraft
+  ok "User 'minecraft' created."
+else
+  ok "User 'minecraft' already exists."
+fi
+
+# ── 3. Create directories ─────────────────────────────────────────────────────
+info "Creating directories..."
+mkdir -p "${MC_DATA}" "${MC_BIN}"
+ok "Directories ready: ${MC_DATA}, ${MC_BIN}"
+
+# ── 4. Download latest Paper JAR ──────────────────────────────────────────────
+info "Fetching latest Paper version from PaperMC API..."
+PAPER_VERSION=$(curl -fsSL "https://api.papermc.io/v2/projects/paper" \
+  | grep -oP '"versions":\[.*?\]' | grep -oP '"[0-9]+\.[0-9]+(?:\.[0-9]+)?"' \
+  | tail -1 | tr -d '"')
+if [[ -z "${PAPER_VERSION}" ]]; then
+  err "Failed to determine latest Paper version from the PaperMC API."
   exit 1
 fi
-ok "EULA accepted."
+info "Latest Paper version: ${PAPER_VERSION}"
 
-# ── Ensure correct ownership ──────────────────────────────────────────────────
-DEPLOY_USER="${HOMELAB_DEPLOY_USER:-${SUDO_USER:-root}}"
-chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${MC_DEST}" 2>/dev/null || true
+PAPER_BUILD=$(curl -fsSL \
+  "https://api.papermc.io/v2/projects/paper/versions/${PAPER_VERSION}/builds" \
+  | grep -oP '"build":\s*\K[0-9]+' | tail -1)
+if [[ -z "${PAPER_BUILD}" ]]; then
+  err "Failed to determine latest Paper build for version ${PAPER_VERSION}."
+  exit 1
+fi
+info "Latest Paper build: ${PAPER_BUILD}"
 
-# ── Pull latest image ─────────────────────────────────────────────────────────
-info "Pulling latest Minecraft Docker image..."
-cd "${MC_DEST}"
-docker compose pull
-ok "Image pulled."
+PAPER_JAR_NAME="paper-${PAPER_VERSION}-${PAPER_BUILD}.jar"
+PAPER_URL="https://api.papermc.io/v2/projects/paper/versions/${PAPER_VERSION}/builds/${PAPER_BUILD}/downloads/${PAPER_JAR_NAME}"
+info "Downloading ${PAPER_JAR_NAME}..."
+curl -fsSL -o "${MC_JAR}" "${PAPER_URL}"
+ok "Paper JAR saved to ${MC_JAR}."
 
-# ── Start (or restart) the server ─────────────────────────────────────────────
-info "Starting Minecraft server..."
-docker compose up -d
-ok "Minecraft container started."
+# ── 5. Write eula.txt ─────────────────────────────────────────────────────────
+if ! grep -q "^eula=true" "${MC_DATA}/eula.txt" 2>/dev/null; then
+  info "Writing eula.txt (accepting Minecraft EULA: https://aka.ms/MinecraftEULA)..."
+  echo "eula=true" > "${MC_DATA}/eula.txt"
+  ok "eula.txt written."
+else
+  ok "eula.txt already contains eula=true."
+fi
 
-# ── Wait a moment and check status ───────────────────────────────────────────
-sleep 5
-echo ""
-docker compose ps
+# ── 6. Write server.properties (only if missing — never overwrite) ────────────
+if [[ ! -f "${MC_DATA}/server.properties" ]]; then
+  info "Writing default server.properties..."
+  cat > "${MC_DATA}/server.properties" <<'EOF'
+server-ip=0.0.0.0
+server-port=25565
+online-mode=true
+max-players=20
+difficulty=normal
+motd=A Minecraft Server
+enable-rcon=true
+rcon.port=25575
+rcon.password=changeme_rcon_secret
+view-distance=8
+simulation-distance=6
+EOF
+  ok "server.properties written."
+else
+  ok "server.properties already exists — not overwriting."
+fi
+
+# ── 7. Fix ownership ──────────────────────────────────────────────────────────
+info "Setting ownership of ${MC_HOME} to minecraft:minecraft..."
+chown -R minecraft:minecraft "${MC_HOME}"
+ok "Ownership set."
+
+# ── 8. Write systemd unit ─────────────────────────────────────────────────────
+info "Writing ${MC_SERVICE}..."
+cat > "${MC_SERVICE}" <<'EOF'
+[Unit]
+Description=Paper Minecraft Server
+After=network.target
+
+[Service]
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/minecraft/data
+ExecStart=/usr/bin/java -Xms1G -Xmx4G \
+  -XX:+UseG1GC \
+  -XX:+ParallelRefProcEnabled \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:+UnlockExperimentalVMOptions \
+  -XX:+DisableExplicitGC \
+  -XX:+AlwaysPreTouch \
+  -XX:G1NewSizePercent=30 \
+  -XX:G1MaxNewSizePercent=40 \
+  -XX:G1HeapRegionSize=8M \
+  -XX:G1ReservePercent=20 \
+  -XX:G1HeapWastePercent=5 \
+  -XX:G1MixedGCCountTarget=4 \
+  -XX:InitiatingHeapOccupancyPercent=15 \
+  -XX:G1MixedGCLiveThresholdPercent=90 \
+  -XX:G1RSetUpdatingPauseTimePercent=5 \
+  -XX:SurvivorRatio=32 \
+  -XX:+PerfDisableSharedMem \
+  -XX:MaxTenuringThreshold=1 \
+  -Dusing.aikars.flags=https://mcflags.emc.gs \
+  -Daikars.new.flags=true \
+  -jar /opt/minecraft/bin/paper.jar --nogui
+Restart=on-failure
+RestartSec=10
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minecraft
+# Allow up to 120 seconds for graceful shutdown (save-all + stop)
+TimeoutStopSec=120
+ExecStop=/usr/bin/kill -s SIGTERM $MAINPID
+
+[Install]
+WantedBy=multi-user.target
+EOF
+ok "minecraft.service written."
+
+# ── 9. Enable and start the service ──────────────────────────────────────────
+info "Reloading systemd and enabling minecraft.service..."
+systemctl daemon-reload
+systemctl enable --now minecraft.service
+ok "minecraft.service enabled and started."
+
 echo ""
 echo "✓ Minecraft setup complete."
 echo ""
-echo "  Server directory : ${MC_DEST}"
-echo "  World data       : ${MC_DEST}/data"
-echo "  Logs             : sudo docker compose -f ${MC_DEST}/compose.yml logs -f"
-echo "  Console          : sudo docker exec -it mc rcon-cli"
-echo ""
-echo "  Players connect to: <your-ip-or-duckdns-hostname>:25565"
+echo "  Server directory : ${MC_HOME}"
+echo "  World data       : ${MC_DATA}"
+echo "  Paper JAR        : ${MC_JAR}"
 echo ""
 echo "  NEXT STEPS:"
+echo "    Follow server logs:"
+echo "      journalctl -u minecraft -f"
+echo ""
+echo "    Once the server has started, set up playit.gg tunneling (if needed):"
+echo "      sudo bash ${REPO_ROOT}/bin/setup-playit.sh"
+echo ""
 echo "    Edit backups/restic.env then:"
-echo "    sudo bash ${REPO_ROOT}/bin/setup-backups.sh"
+echo "      sudo bash ${REPO_ROOT}/bin/setup-backups.sh"
 echo ""
