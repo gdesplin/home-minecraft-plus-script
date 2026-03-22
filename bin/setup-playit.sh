@@ -2,23 +2,23 @@
 # setup-playit.sh — Enable the Playit.gg Paper plugin for CGNAT scenarios
 # Idempotent: safe to run multiple times.
 #
-# This script enables the Playit.gg Paper/Spigot plugin (SpigotMC resource
-# 105566) so the Minecraft server can accept player connections even when the
-# host is behind CGNAT (no port-forwarding needed).
+# This script enables the Playit.gg Paper/Spigot plugin so the Minecraft
+# server can accept player connections even when the host is behind CGNAT
+# (no port-forwarding needed).
 #
 # The plugin runs inside the Paper server itself — no separate system service,
 # APT package, or dedicated user is required.
 #
 # How it works:
-#   1. Adds SPIGET_RESOURCES=105566 to /opt/minecraft/.env so the itzg Docker
-#      image auto-downloads the plugin on next container start.
+#   1. Adds PLUGINS=<url> to /opt/minecraft/.env so the itzg Docker image
+#      auto-downloads the plugin JAR from GitHub on each container start.
 #   2. Restarts the Minecraft container to pick up the change.
 #   3. The plugin prints a claim URL to the server console on first run.
 set -euo pipefail
 
 MC_DEST="/opt/minecraft"
 ENV_FILE="${MC_DEST}/.env"
-PLUGIN_ID="105566"
+PLUGIN_URL="https://github.com/playit-cloud/playit-minecraft-plugin/releases/latest/download/playit-minecraft-plugin.jar"
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [ OK ]  $*"; }
@@ -67,30 +67,30 @@ case "${SERVER_TYPE^^}" in
     ;;
 esac
 
-# ── Add SPIGET_RESOURCES to .env ──────────────────────────────────────────────
-if grep -q "^SPIGET_RESOURCES=.*${PLUGIN_ID}" "${ENV_FILE}" 2>/dev/null; then
-  ok "Playit.gg plugin (${PLUGIN_ID}) is already in SPIGET_RESOURCES."
-elif grep -q "^SPIGET_RESOURCES=" "${ENV_FILE}" 2>/dev/null; then
-  # SPIGET_RESOURCES exists but doesn't include the playit plugin — append it
-  CURRENT=$(grep "^SPIGET_RESOURCES=" "${ENV_FILE}" | tail -1 | cut -d= -f2)
+# ── Add PLUGINS URL to .env ───────────────────────────────────────────────────
+if grep -q "^PLUGINS=.*playit-minecraft-plugin" "${ENV_FILE}" 2>/dev/null; then
+  ok "Playit.gg plugin URL is already in PLUGINS."
+elif grep -q "^PLUGINS=" "${ENV_FILE}" 2>/dev/null; then
+  # PLUGINS exists but doesn't include the playit plugin — append it
+  CURRENT=$(grep "^PLUGINS=" "${ENV_FILE}" | tail -1 | cut -d= -f2-)
   if [[ -z "${CURRENT}" ]]; then
-    sed -i "s|^SPIGET_RESOURCES=.*|SPIGET_RESOURCES=${PLUGIN_ID}|" "${ENV_FILE}"
+    sed -i "s|^PLUGINS=.*|PLUGINS=${PLUGIN_URL}|" "${ENV_FILE}"
   else
-    sed -i "s|^SPIGET_RESOURCES=.*|SPIGET_RESOURCES=${CURRENT},${PLUGIN_ID}|" "${ENV_FILE}"
+    sed -i "s|^PLUGINS=.*|PLUGINS=${CURRENT},${PLUGIN_URL}|" "${ENV_FILE}"
   fi
-  ok "Added Playit.gg plugin to existing SPIGET_RESOURCES."
-elif grep -q "^# *SPIGET_RESOURCES=" "${ENV_FILE}" 2>/dev/null; then
-  # Commented-out SPIGET_RESOURCES line — uncomment and set
-  sed -i "s|^# *SPIGET_RESOURCES=.*|SPIGET_RESOURCES=${PLUGIN_ID}|" "${ENV_FILE}"
-  ok "Uncommented and set SPIGET_RESOURCES=${PLUGIN_ID}."
+  ok "Added Playit.gg plugin URL to existing PLUGINS."
+elif grep -q "^# *PLUGINS=" "${ENV_FILE}" 2>/dev/null; then
+  # Commented-out PLUGINS line — uncomment and set
+  sed -i "s|^# *PLUGINS=.*|PLUGINS=${PLUGIN_URL}|" "${ENV_FILE}"
+  ok "Uncommented and set PLUGINS to Playit.gg plugin URL."
 else
-  # No SPIGET_RESOURCES line at all — add it
+  # No PLUGINS line at all — add it
   {
     echo ""
     echo "# Playit.gg plugin for CGNAT tunneling"
-    echo "SPIGET_RESOURCES=${PLUGIN_ID}"
+    echo "PLUGINS=${PLUGIN_URL}"
   } >> "${ENV_FILE}"
-  ok "Added SPIGET_RESOURCES=${PLUGIN_ID} to ${ENV_FILE}."
+  ok "Added PLUGINS=${PLUGIN_URL} to ${ENV_FILE}."
 fi
 
 # ── Restart the Minecraft container ───────────────────────────────────────────

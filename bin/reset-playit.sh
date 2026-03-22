@@ -7,7 +7,7 @@
 #   • You are switching from the plugin to direct port-forwarding.
 #
 # WHAT THIS SCRIPT DOES:
-#   1. Removes SPIGET_RESOURCES entry for the Playit.gg plugin from .env
+#   1. Removes PLUGINS / SPIGET_RESOURCES entries for the Playit.gg plugin from .env
 #   2. Deletes the plugin JAR and data directory from the server
 #   3. Restarts the Minecraft container
 #
@@ -24,6 +24,7 @@ MC_DEST="/opt/minecraft"
 ENV_FILE="${MC_DEST}/.env"
 PLUGIN_ID="105566"
 PLUGIN_DIR="${MC_DEST}/data/plugins"
+PLUGIN_URL_PATTERN="playit-minecraft-plugin"
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [ OK ]  $*"; }
@@ -50,7 +51,7 @@ echo ""
 echo "  Affected paths:"
 echo "    ${PLUGIN_DIR}/PlayitGg/             (plugin data + config)"
 echo "    ${PLUGIN_DIR}/PlayitGg*.jar         (plugin JAR)"
-echo "    ${ENV_FILE}                         (SPIGET_RESOURCES entry)"
+echo "    ${ENV_FILE}                         (PLUGINS / SPIGET_RESOURCES entry)"
 echo ""
 read -r -p "  Type YES to confirm and proceed: " CONFIRM
 echo ""
@@ -59,23 +60,37 @@ if [[ "${CONFIRM}" != "YES" ]]; then
   exit 0
 fi
 
-# ── 1. Remove plugin ID from SPIGET_RESOURCES in .env ────────────────────────
+# ── 1. Remove plugin entries from .env ────────────────────────────────────────
 if [[ -f "${ENV_FILE}" ]]; then
   info "Updating ${ENV_FILE}..."
+
+  # ── Remove Playit.gg URL from PLUGINS ──────────────────────────────────────
+  if grep -q "^PLUGINS=" "${ENV_FILE}" 2>/dev/null; then
+    CURRENT=$(grep "^PLUGINS=" "${ENV_FILE}" | tail -1 | cut -d= -f2-)
+    # Remove any URL containing the playit plugin pattern
+    NEW_VALUE=$(echo "${CURRENT}" | tr ',' '\n' | { grep -v "${PLUGIN_URL_PATTERN}" || true; } | paste -sd ',' - )
+    if [[ -z "${NEW_VALUE}" ]]; then
+      sed -i "s|^PLUGINS=.*|# PLUGINS=|" "${ENV_FILE}"
+      ok "Removed PLUGINS (no other plugins)."
+    else
+      sed -i "s|^PLUGINS=.*|PLUGINS=${NEW_VALUE}|" "${ENV_FILE}"
+      ok "Removed Playit.gg from PLUGINS (kept other entries)."
+    fi
+  else
+    ok "PLUGINS not found in .env — nothing to remove."
+  fi
+
+  # ── Remove Playit.gg ID from SPIGET_RESOURCES (legacy) ────────────────────
   if grep -q "^SPIGET_RESOURCES=" "${ENV_FILE}" 2>/dev/null; then
     CURRENT=$(grep "^SPIGET_RESOURCES=" "${ENV_FILE}" | tail -1 | cut -d= -f2)
-    # Remove the plugin ID (handles sole entry, leading, trailing, or middle position)
     NEW_VALUE=$(echo "${CURRENT}" | sed "s/${PLUGIN_ID}//g" | sed 's/,,/,/g' | sed 's/^,//;s/,$//')
     if [[ -z "${NEW_VALUE}" ]]; then
-      # No other resources — comment out the line
       sed -i "s|^SPIGET_RESOURCES=.*|# SPIGET_RESOURCES=|" "${ENV_FILE}"
       ok "Removed SPIGET_RESOURCES (no other plugins)."
     else
       sed -i "s|^SPIGET_RESOURCES=.*|SPIGET_RESOURCES=${NEW_VALUE}|" "${ENV_FILE}"
       ok "Removed Playit.gg from SPIGET_RESOURCES (kept: ${NEW_VALUE})."
     fi
-  else
-    ok "SPIGET_RESOURCES not found in .env — nothing to remove."
   fi
 else
   warn "${ENV_FILE} not found."
