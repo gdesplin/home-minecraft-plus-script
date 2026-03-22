@@ -46,38 +46,35 @@ else
   echo "     Run: sudo bash bin/setup-minecraft.sh"
 fi
 
-# ── Playit.gg tunnel ─────────────────────────────────────────────────────────
-hdr "Playit.gg Tunnel"
-if systemctl is-active --quiet playit 2>/dev/null; then
-  ok "Playit service is running."
-  PLAYIT_BIN="/opt/playit/playit"
-  if [[ -x "${PLAYIT_BIN}" ]]; then
-    PLAYIT_VER=$("${PLAYIT_BIN}" --version 2>/dev/null || echo "unknown")
-    echo "     Version  : ${PLAYIT_VER}"
+# ── Playit.gg plugin ──────────────────────────────────────────────────────────
+hdr "Playit.gg Plugin"
+PLAYIT_PLUGIN_DIR="/opt/minecraft/data/plugins"
+if ls "${PLAYIT_PLUGIN_DIR}"/PlayitGg*.jar &>/dev/null 2>&1 \
+    || ls "${PLAYIT_PLUGIN_DIR}"/playit*.jar &>/dev/null 2>&1; then
+  ok "Playit.gg plugin JAR found."
+  PLAYIT_JAR=$(find "${PLAYIT_PLUGIN_DIR}" -maxdepth 1 \( -name 'PlayitGg*.jar' -o -name 'playit*.jar' \) -print -quit 2>/dev/null)
+  echo "     Plugin: $(basename "${PLAYIT_JAR}")"
+  if [[ -d "${PLAYIT_PLUGIN_DIR}/PlayitGg" ]]; then
+    ok "Plugin data directory exists."
+  else
+    warn "Plugin data directory not found — plugin may not have run yet."
   fi
-  # Show the active ExecStart so the user can verify binary path and flags
-  EXEC_START=$(systemctl show playit -p ExecStart --value 2>/dev/null \
-    | sed 's/^.*path=//;s/ ;.*$//' || echo "unknown")
-  echo "     ExecStart: ${EXEC_START}"
-  # Quick loopback reachability check for the Minecraft port
-  if command -v nc &>/dev/null; then
-    if nc -z -w2 127.0.0.1 25565 2>/dev/null; then
-      ok "127.0.0.1:25565 is reachable from the host (Docker port is published)."
-    else
-      warn "127.0.0.1:25565 is NOT reachable — Minecraft may not be running or the port is not published."
-      echo "     Check: sudo docker compose -f /opt/minecraft/compose.yml ps"
-      echo "     Check: sudo docker ps --format 'table {{.Names}}\\t{{.Ports}}'"
-    fi
+  # Check if the env var is set
+  ENV_FILE="/opt/minecraft/.env"
+  if [[ -f "${ENV_FILE}" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "${ENV_FILE}" 2>/dev/null; then
+    ok "SPIGET_RESOURCES includes Playit.gg (105566)."
+  else
+    warn "SPIGET_RESOURCES does not include 105566 — plugin may not auto-update."
   fi
-elif systemctl list-unit-files playit.service &>/dev/null 2>&1 \
-    && systemctl list-unit-files playit.service | grep -q playit; then
-  warn "Playit service is installed but NOT running."
-  echo "     Run: sudo systemctl start playit"
-  echo "     Check: sudo systemctl status playit"
-  echo "     Logs: sudo journalctl -u playit -n 30"
 else
-  warn "Playit service not found (not installed or not in use)."
-  echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"
+  if [[ -f "/opt/minecraft/.env" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "/opt/minecraft/.env" 2>/dev/null; then
+    warn "Playit.gg is configured in .env but plugin JAR not found yet."
+    echo "     The plugin will be downloaded on next container start."
+    echo "     Run: cd /opt/minecraft && sudo docker compose up -d"
+  else
+    warn "Playit.gg plugin not installed."
+    echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"
+  fi
 fi
 
 # ── DuckDNS ───────────────────────────────────────────────────────────────────
