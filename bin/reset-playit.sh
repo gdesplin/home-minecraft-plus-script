@@ -1,33 +1,29 @@
 #!/usr/bin/env bash
-# reset-playit.sh — Hard-reset all Playit.gg state for a clean reinstall
+# reset-playit.sh — Remove the Playit.gg plugin and its data
 #
 # USE THIS WHEN:
-#   • The tunnel shows online on the dashboard but external connections never
-#     arrive at the Minecraft server (no log lines in the playit agent).
-#   • status=101 on 'systemctl status playit' after changing configs.
-#   • You accidentally ran /opt/playit/playit as your normal login instead of
-#     the 'playit' service user, creating a duplicate agent identity.
-#   • Any other situation where you need a single, definitive clean slate.
+#   • You want to stop using Playit.gg tunneling.
+#   • You need a fresh Playit.gg claim (new identity).
+#   • You are switching from the plugin to direct port-forwarding.
 #
 # WHAT THIS SCRIPT DOES:
-#   1. Stops and disables the playit systemd service.
-#   2. Purges the playit APT package (removes the vendor binary and unit).
-#   3. Deletes ALL Playit state: /etc/playit, /opt/playit, /var/log/playit,
-#      the systemd drop-in override, and any user-level config in ~/.config.
-#   4. Reloads systemd.
-#   5. Optionally re-runs setup-playit.sh for a fresh install.
+#   1. Removes SPIGET_RESOURCES entry for the Playit.gg plugin from .env
+#   2. Deletes the plugin JAR and data directory from the server
+#   3. Restarts the Minecraft container
 #
 # AFTER RUNNING THIS SCRIPT:
-#   • Re-run:  sudo bash bin/setup-playit.sh
-#   • Claim:   sudo -u playit /opt/playit/playit
-#   • Enable:  sudo systemctl enable --now playit
+#   • To re-enable: sudo bash bin/setup-playit.sh
 #
 # NOTE: Go to https://playit.gg → Agents and DELETE any stale agents from
-# previous installs so only the newly claimed agent remains.
+# previous installs so only the current agent remains.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MC_DEST="/opt/minecraft"
+ENV_FILE="${MC_DEST}/.env"
+PLUGIN_ID="105566"
+PLUGIN_DIR="${MC_DEST}/data/plugins"
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [ OK ]  $*"; }
@@ -45,19 +41,16 @@ require_root
 
 echo ""
 echo "============================================"
-echo "  reset-playit.sh — Full Playit.gg Reset"
+echo "  reset-playit.sh — Remove Playit.gg Plugin"
 echo "============================================"
 echo ""
-warn "This will PERMANENTLY delete all Playit.gg configuration,"
-warn "secrets, logs, and binaries from this machine."
+warn "This will remove the Playit.gg plugin and its configuration"
+warn "from the Minecraft server."
 echo ""
 echo "  Affected paths:"
-echo "    /opt/playit/               (binary + runtime data)"
-echo "    /etc/playit/               (secret key + config)"
-echo "    /var/log/playit/           (logs)"
-echo "    /etc/systemd/system/playit.service.d/  (drop-in override)"
-echo "    ~/.config/playit_gg/       (user-level identity, current user)"
-echo "    /home/playit/.config/      (playit user home config)"
+echo "    ${PLUGIN_DIR}/PlayitGg/             (plugin data + config)"
+echo "    ${PLUGIN_DIR}/PlayitGg*.jar         (plugin JAR)"
+echo "    ${ENV_FILE}                         (SPIGET_RESOURCES entry)"
 echo ""
 read -r -p "  Type YES to confirm and proceed: " CONFIRM
 echo ""
@@ -66,58 +59,56 @@ if [[ "${CONFIRM}" != "YES" ]]; then
   exit 0
 fi
 
-# ── 1. Stop and disable the service ──────────────────────────────────────────
-info "Stopping and disabling playit service..."
-systemctl stop playit 2>/dev/null && ok "Service stopped." || info "Service was not running."
-systemctl disable playit 2>/dev/null && ok "Service disabled." || info "Service was not enabled."
-
-# ── 2. Purge the APT package ──────────────────────────────────────────────────
-info "Purging playit APT package..."
-apt-get remove --purge -y playit 2>/dev/null && ok "Package purged." || info "Package was not installed via APT."
-apt-get autoremove -y -qq
-
-# ── 3. Delete all Playit state ────────────────────────────────────────────────
-info "Removing /opt/playit (binary + runtime data)..."
-rm -rf /opt/playit
-ok "Removed /opt/playit."
-
-info "Removing /etc/playit (secret key + config)..."
-rm -rf /etc/playit
-ok "Removed /etc/playit."
-
-info "Removing /var/log/playit (logs)..."
-rm -rf /var/log/playit
-ok "Removed /var/log/playit."
-
-info "Removing systemd drop-in override..."
-rm -rf /etc/systemd/system/playit.service.d
-rm -f /etc/systemd/system/playit.service   # remove any manually placed unit, if present
-ok "Drop-in removed."
-
-info "Removing user-level Playit config (current user: ${SUDO_USER:-root})..."
-if [[ -n "${SUDO_USER:-}" ]]; then
-  USER_HOME=$(eval echo "~${SUDO_USER}")
-  rm -rf "${USER_HOME}/.config/playit_gg"
-  ok "Removed ${USER_HOME}/.config/playit_gg"
+# ── 1. Remove plugin ID from SPIGET_RESOURCES in .env ────────────────────────
+if [[ -f "${ENV_FILE}" ]]; then
+  info "Updating ${ENV_FILE}..."
+  if grep -q "^SPIGET_RESOURCES=" "${ENV_FILE}" 2>/dev/null; then
+    CURRENT=$(grep "^SPIGET_RESOURCES=" "${ENV_FILE}" | tail -1 | cut -d= -f2)
+    # Remove the plugin ID (handles sole entry, leading, trailing, or middle position)
+    NEW_VALUE=$(echo "${CURRENT}" | sed "s/${PLUGIN_ID}//g" | sed 's/,,/,/g' | sed 's/^,//;s/,$//')
+    if [[ -z "${NEW_VALUE}" ]]; then
+      # No other resources — comment out the line
+      sed -i "s|^SPIGET_RESOURCES=.*|# SPIGET_RESOURCES=|" "${ENV_FILE}"
+      ok "Removed SPIGET_RESOURCES (no other plugins)."
+    else
+      sed -i "s|^SPIGET_RESOURCES=.*|SPIGET_RESOURCES=${NEW_VALUE}|" "${ENV_FILE}"
+      ok "Removed Playit.gg from SPIGET_RESOURCES (kept: ${NEW_VALUE})."
+    fi
+  else
+    ok "SPIGET_RESOURCES not found in .env — nothing to remove."
+  fi
+else
+  warn "${ENV_FILE} not found."
 fi
 
-info "Removing playit user home config (/home/playit/.config)..."
-rm -rf /home/playit/.config/playit_gg
-ok "Removed /home/playit/.config/playit_gg (if it existed)."
+# ── 2. Delete plugin files ────────────────────────────────────────────────────
+info "Removing plugin files..."
+rm -rf "${PLUGIN_DIR:?}/PlayitGg" 2>/dev/null && ok "Removed ${PLUGIN_DIR}/PlayitGg/" || true
+# Plugin JAR name may vary (e.g. PlayitGg-0.1.2.jar)
+find "${PLUGIN_DIR}" -maxdepth 1 -name 'PlayitGg*.jar' -delete 2>/dev/null \
+  && ok "Removed PlayitGg*.jar" || true
+# Also check for lowercase variants
+find "${PLUGIN_DIR}" -maxdepth 1 -iname 'playit*.jar' -delete 2>/dev/null || true
 
-# Also clean up if the playit user's home is /opt/playit (non-standard home)
-rm -rf /opt/playit/.config/playit_gg 2>/dev/null || true
-
-# ── 4. Reload systemd ─────────────────────────────────────────────────────────
-info "Reloading systemd..."
-systemctl daemon-reload
-ok "systemd reloaded."
+# ── 3. Restart Minecraft container ───────────────────────────────────────────
+if [[ -f "${MC_DEST}/compose.yml" ]]; then
+  info "Restarting Minecraft container..."
+  cd "${MC_DEST}"
+  if docker compose ps 2>/dev/null | grep -q "running\|Up"; then
+    docker compose up -d --force-recreate
+    ok "Minecraft container restarted."
+  else
+    warn "Minecraft container is not running — skipping restart."
+  fi
+else
+  warn "compose.yml not found — skipping restart."
+fi
 
 echo ""
-echo "✓ Playit.gg state fully removed."
+echo "✓ Playit.gg plugin removed."
 echo ""
 
-# ── 5. Offer to reinstall ─────────────────────────────────────────────────────
+# ── 4. Offer to reinstall ─────────────────────────────────────────────────────
 read -r -p "  Run setup-playit.sh now to reinstall? [y/N] " DO_SETUP
 echo ""
 if [[ "${DO_SETUP,,}" == "y" ]]; then
@@ -130,12 +121,6 @@ else
   echo "  When you are ready, run:"
   echo "    sudo bash ${REPO_ROOT}/bin/setup-playit.sh"
   echo ""
-  echo "  Then claim the agent as the service user:"
-  echo "    sudo -u playit /opt/playit/playit"
-  echo ""
-  echo "  Finally, enable the service:"
-  echo "    sudo systemctl enable --now playit"
-  echo ""
   echo "  ⚠  Also go to https://playit.gg → Agents and DELETE any stale agents"
-  echo "     from previous installs so only the new agent remains."
+  echo "     from previous installs so only the current agent remains."
 fi

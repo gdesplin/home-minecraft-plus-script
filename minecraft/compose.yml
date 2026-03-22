@@ -84,6 +84,13 @@ services:
       GEYSER_ENABLED: "${GEYSER_ENABLED:-true}"
       FLOODGATE_ENABLED: "${FLOODGATE_ENABLED:-true}"
 
+      # ── Plugins (auto-downloaded from SpigotMC) ────────────────────────────
+      # Comma-separated SpigotMC resource IDs.
+      # 105566 = Playit.gg plugin — creates a tunnel so players can connect
+      # even when the host is behind CGNAT (no port-forwarding needed).
+      # See: https://www.spigotmc.org/resources/playit-gg.105566/
+      SPIGET_RESOURCES: "${SPIGET_RESOURCES:-}"
+
     volumes:
       # World data + config persisted here
       - ./data:/data
