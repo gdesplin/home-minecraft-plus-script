@@ -2,11 +2,16 @@
 # setup-playit.sh — Install and configure Playit.gg tunnel for CGNAT scenarios
 # Idempotent: safe to run multiple times.
 #
-# This script follows the standard Ubuntu install path:
+# NOTE: The official Playit APT package (tested with v0.17.1) installs the
+# binary at /opt/playit/playit — it does NOT place it on $PATH.
+# 'which playit' will return nothing even after a successful install.
+# All manual commands (claim, debug) must use /opt/playit/playit explicitly.
+#
+# This script:
 #   - Installs playit via the official APT repository
 #   - Uses the vendor-provided systemd unit (no overwrite of /usr/lib/systemd/system/playit.service)
 #   - Places a drop-in override at /etc/systemd/system/playit.service.d/override.conf
-#   - Keeps a single canonical config location at /etc/playit/playit.toml
+#   - Creates /etc/playit/ as the canonical config/secret directory
 set -euo pipefail
 
 info()  { echo "  [INFO]  $*"; }
@@ -62,7 +67,7 @@ fi
 info "Updating package lists and installing playit..."
 apt-get update -qq
 apt-get install -y -qq playit
-ok "playit installed: $(playit --version 2>/dev/null || echo '(version unknown)')"
+ok "playit installed: $(/opt/playit/playit --version 2>/dev/null || echo '(version unknown)')"
 
 # ── Create dedicated playit system user ──────────────────────────────────────
 if ! id -u playit &>/dev/null; then
@@ -74,6 +79,8 @@ else
 fi
 
 # ── Create config / data directory ───────────────────────────────────────────
+# The APT package installs its binary into /opt/playit/ (/opt/playit/playit).
+# We set ownership so the service user can write state/secrets there.
 if [[ ! -d /opt/playit ]]; then
   info "Creating /opt/playit directory..."
   mkdir -p /opt/playit
@@ -86,7 +93,9 @@ chown playit:playit /opt/playit
 chmod 750 /opt/playit
 
 # ── Create canonical config directory ────────────────────────────────────────
-# The playit APT package expects its config at /etc/playit/playit.toml.
+# The playit vendor systemd unit passes --secret_path /etc/playit/... so the
+# agent reads/writes its secret key from /etc/playit/.  The playit user must
+# have write access here so that the interactive claim step can persist the key.
 if [[ ! -d /etc/playit ]]; then
   info "Creating /etc/playit config directory..."
   mkdir -p /etc/playit
@@ -126,9 +135,13 @@ echo ""
 echo "  ┌─ NEXT STEPS ──────────────────────────────────────────────────────────┐"
 echo "  │                                                                       │"
 echo "  │  1. Claim the agent ONE TIME as the service user:                     │"
-echo "  │       sudo -u playit playit                                           │"
+echo "  │       sudo -u playit /opt/playit/playit                              │"
 echo "  │                                                                       │"
-echo "  │     ⚠  IMPORTANT: do NOT run 'playit' as your normal login.          │"
+echo "  │     NOTE: 'which playit' will return nothing — the APT package       │"
+echo "  │     (v0.17.1) installs the binary at /opt/playit/playit only.        │"
+echo "  │     Always use the full path for manual commands.                     │"
+echo "  │                                                                       │"
+echo "  │     ⚠  IMPORTANT: do NOT run the agent as your normal login.         │"
 echo "  │     Running it as your own user writes a separate secret key to       │"
 echo "  │     ~/.config/playit_gg/ and creates a duplicate agent identity,      │"
 echo "  │     which causes tunnels to show online but receive no traffic.       │"
@@ -145,9 +158,9 @@ echo "  │                                                                     
 echo "  │  4. Exit the wizard (Ctrl+C), then enable the service:                │"
 echo "  │       sudo systemctl enable --now playit                              │"
 echo "  │                                                                       │"
-echo "  │  5. Verify the agent starts with a single identity:                   │"
-echo "  │       sudo cat /etc/playit/playit.toml                                │"
-echo "  │       sudo tail -f /var/log/playit/playit.log                         │"
+echo "  │  5. Verify the agent is running:                                      │"
+echo "  │       sudo systemctl status playit                                    │"
+echo "  │       sudo journalctl -u playit -n 30                                 │"
 echo "  │                                                                       │"
 echo "  │  6. Share your tunnel address with players:                           │"
 echo "  │       yourname.joinplayit.gg                                          │"
