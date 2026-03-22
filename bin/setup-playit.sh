@@ -107,11 +107,31 @@ fi
 chown root:playit /etc/playit
 chmod 750 /etc/playit
 
+# ── Create log directory ──────────────────────────────────────────────────────
+# The playit binary (APT package) uses a rolling file appender that writes to
+# /var/log/playit/. This directory must exist and be owned by the playit service
+# user BEFORE the service starts; otherwise the binary panics with exit-code 101:
+#   "initializing rolling file appender failed: InitError { ... }"
+# Note: running 'sudo -u playit /opt/playit/playit' interactively works even
+# without this directory because the interactive run logs elsewhere by default.
+if [[ ! -d /var/log/playit ]]; then
+  info "Creating /var/log/playit log directory..."
+  mkdir -p /var/log/playit
+  ok "Directory created."
+else
+  ok "/var/log/playit already exists."
+fi
+chown playit:playit /var/log/playit
+chmod 755 /var/log/playit
+ok "/var/log/playit ownership set to playit:playit."
+
 # ── Install systemd drop-in override (do NOT overwrite vendor unit) ───────────
 # The official playit APT package ships its own unit at:
 #   /usr/lib/systemd/system/playit.service
-# We use a drop-in override to enforce the correct user/group and working
-# directory without replacing the vendor unit.
+# We use a drop-in override to enforce the correct user/group, working directory,
+# and log directory without replacing the vendor unit.
+# LogsDirectory=playit tells systemd to create/own /var/log/playit before start,
+# providing a belt-and-suspenders guarantee alongside the mkdir above.
 DROPIN_DIR="/etc/systemd/system/playit.service.d"
 DROPIN_FILE="${DROPIN_DIR}/override.conf"
 
@@ -123,6 +143,10 @@ cat > "${DROPIN_FILE}" << 'EOF'
 User=playit
 Group=playit
 WorkingDirectory=/opt/playit
+# Ensure /var/log/playit/ exists and is owned by the service user before start.
+# This prevents the "rolling file appender failed" panic (exit-code 101) that
+# occurs when the directory is absent after a fresh install or reset.
+LogsDirectory=playit
 EOF
 ok "Drop-in override written to ${DROPIN_FILE}."
 

@@ -366,6 +366,7 @@ sudo systemctl stop playit
 | Tunnel shows offline | Restart the service: `sudo systemctl restart playit` |
 | Wrong tunnel address | Check the dashboard at [playit.gg](https://playit.gg) for your current address |
 | **`which playit` returns nothing** | Expected — the APT package installs to `/opt/playit/playit` only (not on `$PATH`). Use the full path for all manual commands. See [below](#which-playit-returns-nothing). |
+| **exit-code 101, "rolling file appender failed"** | The log directory `/var/log/playit` is missing or unowned. See [below](#exit-code-101-rolling-file-appender-failed). |
 | **Tunnel online, but no traffic / connection attempts** | You have duplicate agent identities — see [below](#duplicate-agent-identity-tunnel-online-no-traffic) |
 | **Agent AND tunnel both online, Minecraft works on LAN, but tunnel connections fail** | Docker port publishing or wrong tunnel local address — see [below](#agent-and-tunnel-online-minecraft-works-on-lan-external-connections-still-fail) |
 
@@ -405,7 +406,46 @@ sudo apt-get install --reinstall playit
 ls -l /opt/playit/playit
 ```
 
-#### Agent and Tunnel Online, Minecraft Works on LAN, External Connections Still Fail
+#### Exit-code 101, "rolling file appender failed"
+
+**Symptom:** The service crashes immediately on every start:
+
+```
+playit[xxxxx]: thread 'main' panicked at ...:
+               initializing rolling file appender failed: InitError { context: ... }
+playit.service: Main process exited, code=exited, status=101/n/a
+```
+
+Crucially, running `sudo -u playit /opt/playit/playit` **interactively works fine** — logs
+scroll by and the agent operates normally. Only the systemd service fails.
+
+**Cause:** The playit binary uses a rolling log-file appender. When started via systemd
+the binary tries to write its rolling log to `/var/log/playit/`. If that directory is
+absent (or not owned by the `playit` service user), the binary panics before it even
+reads the secret key.
+
+The interactive run succeeds because it falls back to writing logs to a different path
+(typically the working directory or a user cache directory) when the log directory does
+not exist.
+
+**Quick fix:**
+
+```bash
+sudo mkdir -p /var/log/playit
+sudo chown playit:playit /var/log/playit
+sudo chmod 755 /var/log/playit
+sudo systemctl restart playit
+sudo systemctl status playit
+```
+
+**Permanent fix:** `setup-playit.sh` now creates `/var/log/playit` automatically and adds
+`LogsDirectory=playit` to the systemd drop-in so systemd pre-creates the directory with
+correct ownership before every start. If you installed before this fix was added, run a
+reset to pick it up:
+
+```bash
+sudo bash bin/reset-playit.sh
+```
 
 **Symptom:** The Playit dashboard shows both the agent and tunnel as "online". LAN clients
 can connect to the Minecraft server using the server's local IP. But players connecting
@@ -804,6 +844,56 @@ This shows:
 
 ---
 
+## Daily Server Management (Convenience Scripts)
+
+After initial setup, use these scripts for day-to-day server management.
+
+### Interactive Menu (recommended)
+
+```bash
+bash bin/mc-menu.sh
+```
+
+A colorful, numbered menu that covers all common tasks — start/stop/restart, live logs,
+admin console, plugin install, Playit tunnel control, and manual backups. No need to
+remember individual commands.
+
+### Individual Commands
+
+| Script | Purpose |
+|--------|---------|
+| `bash bin/mc-start.sh` | Start (or bring up) the Minecraft container |
+| `bash bin/mc-stop.sh` | Gracefully stop — runs `save-all` via RCON first |
+| `bash bin/mc-restart.sh` | Stop then start |
+| `bash bin/mc-logs.sh` | Follow live server logs (Ctrl+C to exit) |
+| `bash bin/mc-console.sh` | Open interactive RCON admin console |
+| `bash bin/mc-add-plugin.sh <file\|url>` | Install a plugin and restart the server |
+| `bash bin/status.sh` | Full homelab health dashboard |
+
+**Examples:**
+
+```bash
+# Start the server
+bash bin/mc-start.sh
+
+# Follow live logs until ready ("Done! For help, type 'help'")
+bash bin/mc-logs.sh
+
+# Open admin console — type commands, 'exit' to quit
+bash bin/mc-console.sh
+# > list
+# > say Hello, world!
+# > op YourUsername
+
+# Add a plugin from a URL
+bash bin/mc-add-plugin.sh https://example.com/EssentialsX.jar
+
+# Add a plugin from a local file
+bash bin/mc-add-plugin.sh ~/Downloads/EssentialsX.jar
+```
+
+---
+
 ## Backups and Restore
 
 See [`backups/README.md`](backups/README.md) for full documentation.
@@ -949,7 +1039,14 @@ sudo docker exec mc rcon-cli "whitelist add .Steve"
 │   ├── setup-backups.sh    # Restic + systemd backup timer
 │   ├── setup-playit.sh     # Playit.gg tunnel (CGNAT support)
 │   ├── reset-playit.sh     # Full Playit.gg wipe + reinstall helper
-│   └── status.sh           # Health dashboard
+│   ├── status.sh           # Full homelab health dashboard
+│   ├── mc-menu.sh          # Interactive daily management menu
+│   ├── mc-start.sh         # Start the Minecraft container
+│   ├── mc-stop.sh          # Graceful stop (RCON save-all + stop)
+│   ├── mc-restart.sh       # Restart (stop + start)
+│   ├── mc-logs.sh          # Follow live server logs
+│   ├── mc-console.sh       # RCON admin console
+│   └── mc-add-plugin.sh    # Install a plugin (.jar file or URL)
 ├── config/
 │   └── playit.service      # LEGACY — historical reference only (not installed by setup-playit.sh)
 ├── minecraft/
