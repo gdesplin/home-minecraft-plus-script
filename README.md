@@ -276,10 +276,18 @@ This script:
 - Installs the `playit` agent via APT
 - Creates a dedicated `playit` system user for security
 - Sets up `/opt/playit/` — the directory where the APT package installs the binary (`/opt/playit/playit`)
-- Creates `/etc/playit/` — the canonical secret/config directory used by the vendor systemd unit
+  and the default home for the `playit` service user (secrets are stored at
+  `/opt/playit/.config/playit_gg/playit.toml`)
 - Writes a systemd drop-in override at `/etc/systemd/system/playit.service.d/override.conf`
-  to run the service as the `playit` user — **without** overwriting the vendor unit at
+  that **clears the vendor `ExecStart`** (which includes `--secret_path /etc/playit/playit.toml`
+  in v0.17.x builds) and replaces it with a clean command that **does not pass `--secret_path`**,
+  then runs the service as the `playit` user — **without** overwriting the vendor unit at
   `/usr/lib/systemd/system/playit.service`
+
+> **Why the drop-in matters:** The Playit APT package (v0.17.1) ships a vendor unit whose
+> `ExecStart` includes `--secret_path /etc/playit/playit.toml`. That file does not exist after
+> a fresh install or reset, causing the service to exit immediately with **status=101**.
+> The drop-in override removes this flag so the agent uses its default config location instead.
 
 > **Note:** The official Playit APT package (v0.17.1) installs the binary at
 > **`/opt/playit/playit`** only — it does **not** add `playit` to `$PATH`.
@@ -361,6 +369,7 @@ sudo systemctl stop playit
 | Problem | Solution |
 |---------|----------|
 | Agent not starting | `sudo systemctl status playit` — check for errors |
+| **`status=101` on `systemctl status playit`** | Drop-in override is missing or stale — see [below](#service-exits-with-status101) |
 | Can't claim tunnel | Re-run `sudo -u playit /opt/playit/playit` — do **not** run as your normal user |
 | Connection refused by players | Make sure Minecraft is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
 | Tunnel shows offline | Restart the service: `sudo systemctl restart playit` |
@@ -368,6 +377,74 @@ sudo systemctl stop playit
 | **`which playit` returns nothing** | Expected — the APT package installs to `/opt/playit/playit` only (not on `$PATH`). Use the full path for all manual commands. See [below](#which-playit-returns-nothing). |
 | **Tunnel online, but no traffic / connection attempts** | You have duplicate agent identities — see [below](#duplicate-agent-identity-tunnel-online-no-traffic) |
 | **Agent AND tunnel both online, Minecraft works on LAN, but tunnel connections fail** | Docker port publishing or wrong tunnel local address — see [below](#agent-and-tunnel-online-minecraft-works-on-lan-external-connections-still-fail) |
+
+#### Service Exits with status=101
+
+**Symptom:** `sudo systemctl status playit` shows:
+
+```
+Active: failed (Result: exit-code)
+...
+Main PID: <N> (code=exited, status=101)
+```
+
+and the `ExecStart` line (visible in `sudo systemctl cat playit`) contains
+`--secret_path /etc/playit/playit.toml`.
+
+**Cause:** The Playit APT package (v0.17.1) ships a vendor unit whose `ExecStart`
+includes `--secret_path /etc/playit/playit.toml`. After a fresh install or a reset,
+that file does not exist, so the agent exits immediately with code 101.
+The `setup-playit.sh` script creates a systemd drop-in override that clears the vendor
+`ExecStart` and replaces it with a command that omits `--secret_path`. If the drop-in
+is missing or was not applied, the vendor flag persists and the service fails.
+
+> **Version note:** This `--secret_path` behaviour was introduced in the v0.17.x APT
+> package builds. If you are using a newer package version that no longer ships this
+> flag, the drop-in is still harmless (it just sets the same clean `ExecStart`).
+
+**Fix:**
+
+1. Re-run `setup-playit.sh` to write (or refresh) the drop-in override:
+
+   ```bash
+   sudo bash bin/setup-playit.sh
+   ```
+
+2. Confirm the active `ExecStart` does **not** contain `--secret_path`:
+
+   ```bash
+   sudo systemctl cat playit | grep ExecStart
+   ```
+
+   Expected output (two lines — first clears the vendor value, second sets the clean one):
+
+   ```
+   ExecStart=
+   ExecStart=/opt/playit/playit
+   ```
+
+3. Start the service:
+
+   ```bash
+   sudo systemctl restart playit
+   sudo systemctl status playit
+   ```
+
+If the service still shows status=101 after the above, check that the `playit` binary
+is present and executable:
+
+```bash
+ls -l /opt/playit/playit
+sudo -u playit /opt/playit/playit --version
+```
+
+If the binary is missing, reinstall the package:
+
+```bash
+sudo apt-get install --reinstall playit
+```
+
+---
 
 #### `which playit` Returns Nothing
 
@@ -516,9 +593,11 @@ sudo systemctl daemon-reload
 sudo systemctl restart playit
 ```
 
-> **Note:** `setup-playit.sh` creates a minimal override (`User=playit`, `Group=playit`,
-> `WorkingDirectory=/opt/playit`) that is safe and intentional. Only remove the override if
-> it contains an `--secret_path` pointing to a file that does not exist, or other stale flags.
+> **Note:** `setup-playit.sh` creates a drop-in that clears the vendor `ExecStart` and
+> replaces it with `/opt/playit/playit` (no `--secret_path`), plus `User=playit`,
+> `Group=playit`, and `WorkingDirectory=/opt/playit`. This override is intentional and
+> safe. Only remove the drop-in entirely if you are certain the vendor unit's `ExecStart`
+> does not contain `--secret_path` or other stale flags on your installed package version.
 
 ---
 
@@ -537,13 +616,12 @@ systemctl show playit -p User --value
 Then confirm that user's config exists and contains a `secret_key`:
 
 ```bash
-# If the service runs as 'playit':
+# If the service runs as 'playit' (home = /opt/playit):
 sudo cat /opt/playit/.config/playit_gg/playit.toml 2>/dev/null \
-  || sudo ls /etc/playit/ 2>/dev/null \
-  || echo "No config found for 'playit' user"
+  || echo "No config found for 'playit' user — agent needs to be claimed"
 
-# Also check the path the vendor unit explicitly passes (if any):
-sudo systemctl cat playit | grep secret
+# Also verify what ExecStart the active unit uses:
+sudo systemctl cat playit | grep ExecStart
 ```
 
 If no config exists for the service user, re-run the claim as the **same user** the service
@@ -603,8 +681,10 @@ user at some point, creating `~/.config/playit_gg/playit.toml` with a separate i
 
 ```bash
 # Which key is the running service using?
-# (sudo needed: /etc/playit/ is owned root:playit with 750 permissions)
-sudo cat /etc/playit/playit.toml
+# The agent stores its secret in /opt/playit/.config/playit_gg/
+# (the 'playit' user's home is /opt/playit)
+sudo cat /opt/playit/.config/playit_gg/playit.toml 2>/dev/null \
+  || echo "(no secret found for 'playit' user — agent has not been claimed yet)"
 
 # Is there a second identity from a previous interactive run?
 cat ~/.config/playit_gg/playit.toml 2>/dev/null || echo "(no user-level config)"
@@ -642,16 +722,16 @@ sudo apt-get remove --purge -y playit || true
 sudo apt-get autoremove -y
 
 # 3. Delete ALL Playit state (config, logs, drop-in, user-level identity)
-sudo rm -rf /etc/playit
+sudo rm -rf /opt/playit          # binary, runtime data, and secret key
+sudo rm -rf /etc/playit          # legacy config dir (may not exist)
 sudo rm -rf /var/log/playit
-sudo rm -rf /opt/playit
 sudo rm -rf /etc/systemd/system/playit.service.d
 rm -rf ~/.config/playit_gg
 
 # 4. Reload systemd
 sudo systemctl daemon-reload
 
-# 5. Re-install
+# 5. Re-install (creates the drop-in override that fixes --secret_path)
 sudo bash bin/setup-playit.sh
 
 # 6. Claim as the service user (one identity only)

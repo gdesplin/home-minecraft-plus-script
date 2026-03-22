@@ -11,7 +11,9 @@
 #   - Installs playit via the official APT repository
 #   - Uses the vendor-provided systemd unit (no overwrite of /usr/lib/systemd/system/playit.service)
 #   - Places a drop-in override at /etc/systemd/system/playit.service.d/override.conf
-#   - Creates /etc/playit/ as the canonical config/secret directory
+#     that clears the vendor ExecStart (which may include --secret_path in v0.17.x)
+#     and replaces it with a clean command that does not pass --secret_path.
+#     The agent stores its secret in the service user's XDG config home instead.
 set -euo pipefail
 
 info()  { echo "  [INFO]  $*"; }
@@ -92,26 +94,23 @@ fi
 chown playit:playit /opt/playit
 chmod 750 /opt/playit
 
-# ── Create canonical config directory ────────────────────────────────────────
-# The playit vendor systemd unit passes --secret_path /etc/playit/... so the
-# agent reads/writes its secret key from /etc/playit/.  The playit user must
-# have write access here so that the interactive claim step can persist the key.
-if [[ ! -d /etc/playit ]]; then
-  info "Creating /etc/playit config directory..."
-  mkdir -p /etc/playit
-  ok "Directory created."
-else
-  ok "/etc/playit already exists."
-fi
-
-chown root:playit /etc/playit
-chmod 750 /etc/playit
-
 # ── Install systemd drop-in override (do NOT overwrite vendor unit) ───────────
 # The official playit APT package ships its own unit at:
-#   /usr/lib/systemd/system/playit.service
-# We use a drop-in override to enforce the correct user/group and working
-# directory without replacing the vendor unit.
+#   /usr/lib/systemd/system/playit.service  (or /lib/systemd/system/playit.service)
+#
+# Some versions of the vendor unit (e.g. v0.17.1) include --secret_path and/or
+# --secret_wait in their ExecStart line, referencing /etc/playit/playit.toml.
+# That file does not exist after a fresh install or reset, causing the service to
+# exit immediately with status=101.
+#
+# The drop-in below:
+#   1. Clears the vendor ExecStart with an empty ExecStart= directive.
+#   2. Sets a clean ExecStart that does NOT pass --secret_path.
+#   3. Runs the service as the dedicated 'playit' user for security.
+#
+# Without --secret_path the agent stores its secret key in the service user's
+# XDG config home: /opt/playit/.config/playit_gg/playit.toml
+# (because the 'playit' user's home directory is /opt/playit).
 DROPIN_DIR="/etc/systemd/system/playit.service.d"
 DROPIN_FILE="${DROPIN_DIR}/override.conf"
 
@@ -119,6 +118,11 @@ info "Installing systemd drop-in override..."
 mkdir -p "${DROPIN_DIR}"
 cat > "${DROPIN_FILE}" << 'EOF'
 [Service]
+# Clear the vendor ExecStart (may include --secret_path in v0.17.x builds)
+# and replace it with a clean command that never passes --secret_path.
+# The agent will store its secret in /opt/playit/.config/playit_gg/playit.toml
+ExecStart=
+ExecStart=/opt/playit/playit
 # Run as the dedicated playit system user, not root.
 User=playit
 Group=playit
@@ -146,6 +150,9 @@ echo "  │     Running it as your own user writes a separate secret key to     
 echo "  │     ~/.config/playit_gg/ and creates a duplicate agent identity,      │"
 echo "  │     which causes tunnels to show online but receive no traffic.       │"
 echo "  │                                                                       │"
+echo "  │     The agent will store its secret key at:                           │"
+echo "  │       /opt/playit/.config/playit_gg/playit.toml                      │"
+echo "  │                                                                       │"
 echo "  │  2. Open the printed URL in a browser and log in to playit.gg.        │"
 echo "  │                                                                       │"
 echo "  │  3. Add tunnels on the playit.gg dashboard:                           │"
@@ -161,6 +168,10 @@ echo "  │                                                                     
 echo "  │  5. Verify the agent is running:                                      │"
 echo "  │       sudo systemctl status playit                                    │"
 echo "  │       sudo journalctl -u playit -n 30                                 │"
+echo "  │                                                                       │"
+echo "  │     If the service shows status=101, verify the drop-in is in place:  │"
+echo "  │       sudo systemctl cat playit | grep ExecStart                      │"
+echo "  │     The ExecStart should NOT include --secret_path.                   │"
 echo "  │                                                                       │"
 echo "  │  6. Share your tunnel address with players:                           │"
 echo "  │       yourname.joinplayit.gg                                          │"

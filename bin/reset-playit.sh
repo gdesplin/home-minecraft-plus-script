@@ -24,6 +24,10 @@
 #
 # NOTE: Go to https://playit.gg → Agents and DELETE any stale agents from
 # previous installs so only the newly claimed agent remains.
+#
+# NOTE: The script is idempotent — it is safe to run even if some paths or
+# services do not exist. All removal steps use '|| true' so a missing file
+# or stopped service will not abort the reset.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,8 +56,8 @@ warn "This will PERMANENTLY delete all Playit.gg configuration,"
 warn "secrets, logs, and binaries from this machine."
 echo ""
 echo "  Affected paths:"
-echo "    /opt/playit/               (binary + runtime data)"
-echo "    /etc/playit/               (secret key + config)"
+echo "    /opt/playit/               (binary + runtime data + secret key)"
+echo "    /etc/playit/               (legacy config dir, if present)"
 echo "    /var/log/playit/           (logs)"
 echo "    /etc/systemd/system/playit.service.d/  (drop-in override)"
 echo "    ~/.config/playit_gg/       (user-level identity, current user)"
@@ -77,13 +81,16 @@ apt-get remove --purge -y playit 2>/dev/null && ok "Package purged." || info "Pa
 apt-get autoremove -y -qq
 
 # ── 3. Delete all Playit state ────────────────────────────────────────────────
-info "Removing /opt/playit (binary + runtime data)..."
+info "Removing /opt/playit (binary + runtime data + secret key)..."
+# 'apt-get remove' may leave /opt/playit non-empty (dpkg warns about this but
+# does not fail). Force removal of all contents first, then the directory.
+rm -rf /opt/playit/* /opt/playit/.[!.]* /opt/playit/..?* 2>/dev/null || true
 rm -rf /opt/playit
 ok "Removed /opt/playit."
 
-info "Removing /etc/playit (secret key + config)..."
+info "Removing /etc/playit (legacy config dir)..."
 rm -rf /etc/playit
-ok "Removed /etc/playit."
+ok "Removed /etc/playit (if it existed)."
 
 info "Removing /var/log/playit (logs)..."
 rm -rf /var/log/playit
@@ -98,15 +105,16 @@ info "Removing user-level Playit config (current user: ${SUDO_USER:-root})..."
 if [[ -n "${SUDO_USER:-}" ]]; then
   USER_HOME=$(eval echo "~${SUDO_USER}")
   rm -rf "${USER_HOME}/.config/playit_gg"
-  ok "Removed ${USER_HOME}/.config/playit_gg"
+  ok "Removed ${USER_HOME}/.config/playit_gg (if it existed)."
 fi
 
 info "Removing playit user home config (/home/playit/.config)..."
 rm -rf /home/playit/.config/playit_gg
 ok "Removed /home/playit/.config/playit_gg (if it existed)."
 
-# Also clean up if the playit user's home is /opt/playit (non-standard home)
-rm -rf /opt/playit/.config/playit_gg 2>/dev/null || true
+# Also clean up if the playit user's home was /opt/playit (already removed above,
+# but also remove any lingering XDG config written before the purge)
+rm -rf /var/lib/playit 2>/dev/null || true
 
 # ── 4. Reload systemd ─────────────────────────────────────────────────────────
 info "Reloading systemd..."
@@ -138,4 +146,13 @@ else
   echo ""
   echo "  ⚠  Also go to https://playit.gg → Agents and DELETE any stale agents"
   echo "     from previous installs so only the new agent remains."
+  echo ""
+  echo "  ── Troubleshooting status=101 ──────────────────────────────────────"
+  echo "  If the service exits with status=101 after reinstall, the vendor unit"
+  echo "  may include --secret_path /etc/playit/playit.toml in its ExecStart."
+  echo "  The drop-in override created by setup-playit.sh clears that flag."
+  echo "  Verify the active ExecStart contains no --secret_path:"
+  echo "    sudo systemctl cat playit | grep ExecStart"
+  echo "  If --secret_path appears, re-run setup-playit.sh to (re)write the drop-in:"
+  echo "    sudo bash ${REPO_ROOT}/bin/setup-playit.sh"
 fi
