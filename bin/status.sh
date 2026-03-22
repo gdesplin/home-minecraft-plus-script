@@ -61,16 +61,23 @@ if ls "${PLAYIT_PLUGIN_DIR}"/PlayitGg*.jar &>/dev/null 2>&1 \
   fi
   # Check if the env var is set
   ENV_FILE="/opt/minecraft/.env"
-  if [[ -f "${ENV_FILE}" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "${ENV_FILE}" 2>/dev/null; then
-    ok "SPIGET_RESOURCES includes Playit.gg (105566)."
+  if [[ -f "${ENV_FILE}" ]] && grep -q "^PLUGINS=.*playit-minecraft-plugin" "${ENV_FILE}" 2>/dev/null; then
+    ok "PLUGINS includes Playit.gg download URL."
+  elif [[ -f "${ENV_FILE}" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "${ENV_FILE}" 2>/dev/null; then
+    warn "SPIGET_RESOURCES includes Playit.gg (105566) but may be unreliable."
+    echo "     Consider running: sudo bash bin/setup-playit.sh  (switches to direct download)"
   else
-    warn "SPIGET_RESOURCES does not include 105566 — plugin may not auto-update."
+    warn "Playit.gg plugin is not configured for auto-download."
   fi
 else
-  if [[ -f "/opt/minecraft/.env" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "/opt/minecraft/.env" 2>/dev/null; then
+  if [[ -f "/opt/minecraft/.env" ]] && grep -q "^PLUGINS=.*playit-minecraft-plugin" "/opt/minecraft/.env" 2>/dev/null; then
     warn "Playit.gg is configured in .env but plugin JAR not found yet."
     echo "     The plugin will be downloaded on next container start."
     echo "     Run: cd /opt/minecraft && sudo docker compose up -d"
+  elif [[ -f "/opt/minecraft/.env" ]] && grep -q "^SPIGET_RESOURCES=.*105566" "/opt/minecraft/.env" 2>/dev/null; then
+    warn "Playit.gg is configured via SPIGET_RESOURCES but plugin JAR not found."
+    echo "     Spiget downloads can be unreliable. Re-run setup to switch to direct download:"
+    echo "     sudo bash bin/setup-playit.sh"
   else
     warn "Playit.gg plugin not installed."
     echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"

@@ -276,8 +276,8 @@ sudo bash bin/setup-playit.sh
 ```
 
 This script:
-- Adds `SPIGET_RESOURCES=105566` to `/opt/minecraft/.env` so the Docker image
-  auto-downloads the Playit.gg plugin from [SpigotMC](https://www.spigotmc.org/resources/playit-gg.105566/)
+- Adds a `PLUGINS` URL to `/opt/minecraft/.env` so the Docker image
+  auto-downloads the Playit.gg plugin from [GitHub](https://github.com/playit-cloud/playit-minecraft-plugin/releases)
 - Restarts the Minecraft container to pick up the change
 - The plugin prints a claim URL in the server console on first run
 
@@ -338,7 +338,7 @@ Plugin configuration is stored in `/opt/minecraft/data/plugins/PlayitGg/`.
 | Problem | Solution |
 |---------|----------|
 | Plugin not loading | Check server type is PAPER or SPIGOT: `grep TYPE /opt/minecraft/.env` |
-| Plugin JAR not downloaded | Verify `SPIGET_RESOURCES=105566` in `/opt/minecraft/.env`, then restart |
+| Plugin JAR not downloaded | Re-run `sudo bash bin/setup-playit.sh`, then restart the container |
 | No claim URL in logs | Wait 60–90 s for the server to fully start; check logs again |
 | Connection refused by players | Make sure Minecraft is running: `sudo docker compose -f /opt/minecraft/compose.yml ps` |
 | Tunnel shows offline | Restart the server: `cd /opt/minecraft && sudo docker compose restart` |
@@ -363,7 +363,7 @@ runs `setup-playit.sh` immediately afterward.
 # 1. Remove the plugin JAR and data
 sudo rm -rf /opt/minecraft/data/plugins/PlayitGg*
 
-# 2. Remove SPIGET_RESOURCES from .env (or remove 105566 from the list)
+# 2. Remove the Playit.gg URL from PLUGINS in .env (or comment it out)
 sudo nano /opt/minecraft/.env
 
 # 3. Restart the server
