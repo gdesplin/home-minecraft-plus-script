@@ -54,14 +54,15 @@ if [[ -z "${RESTIC_PASSWORD:-}" || "${RESTIC_PASSWORD}" == "CHANGE_ME"* ]]; then
   exit 1
 fi
 
-# ── Install restic ────────────────────────────────────────────────────────────
-if ! command -v restic &>/dev/null; then
-  info "Installing restic..."
-  apt-get install -y -qq restic
-  ok "restic installed."
+# ── Install restic + mcrcon ───────────────────────────────────────────────────
+if ! command -v restic &>/dev/null || ! command -v mcrcon &>/dev/null; then
+  info "Installing restic and mcrcon..."
+  apt-get install -y -qq restic mcrcon
+  ok "restic and mcrcon installed."
 else
   RESTIC_VER=$(restic version | head -1)
   ok "restic already installed: ${RESTIC_VER}"
+  ok "mcrcon already installed."
 fi
 
 # ── Self-update restic (apt version may be older) ─────────────────────────────

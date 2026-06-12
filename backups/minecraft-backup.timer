@@ -2,7 +2,7 @@
 Description=Minecraft world restic backup timer (hourly)
 
 [Timer]
-# Start 5 minutes after boot (give Docker time to start)
+# Start 5 minutes after boot.
 OnBootSec=5min
 # Then repeat every hour
 OnUnitActiveSec=1h

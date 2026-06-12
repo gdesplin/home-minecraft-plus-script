@@ -45,9 +45,7 @@ ufw allow 22/tcp comment 'SSH'
 ok "SSH allowed."
 
 # ── Minecraft Java Edition ────────────────────────────────────────────────────
-# Note: If using the playit.gg agent (for CGNAT scenarios), the agent tunnels
-# traffic to this port from the internet.  Opening this port in UFW is still
-# correct and harmless either way.
+# The Oracle VPS relays public traffic to this host over WireGuard.
 info "Allowing Minecraft (port 25565/tcp)..."
 ufw allow 25565/tcp comment 'Minecraft Java'
 ok "Minecraft port allowed."

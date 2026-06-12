@@ -1,7 +1,6 @@
 [Unit]
 Description=Minecraft world restic backup
-After=docker.service
-Requires=docker.service
+After=minecraft.service
 
 [Service]
 Type=oneshot
@@ -9,7 +8,7 @@ ExecStart=/usr/local/bin/minecraft-backup.sh
 StandardOutput=journal
 StandardError=journal
 
-# Prevent the backup from running if Docker is restarting
+# Prevent the backup from running if the Minecraft data directory is missing.
 ConditionPathExists=/opt/minecraft/data
 
 # Give the backup plenty of time to finish (30 minutes max)

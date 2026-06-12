@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
 # minecraft-backup.sh — Safe restic backup of the Minecraft world
-#
-# Strategy:
-#   1. Signal the Minecraft server to flush world data (via RCON if available)
-#   2. Take a restic snapshot of /opt/minecraft/data
-#   3. Re-enable auto-save
-#   4. Prune old snapshots using the configured retention policy
-#
 # Installed to /usr/local/bin/minecraft-backup.sh by setup-backups.sh.
 # Run by: minecraft-backup.service (triggered by minecraft-backup.timer)
 set -euo pipefail
 
 ENV_FILE="/etc/restic/restic.env"
 MC_DATA_DIR="/opt/minecraft/data"
+MC_SERVICE="minecraft.service"
+SERVER_PROPERTIES="${MC_DATA_DIR}/server.properties"
 RCON_HOST="127.0.0.1"
 RCON_PORT="25575"
-RCON_PASS_FILE=""       # populated below from env
+RCON_PASSWORD=""
 
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')]  $*"; }
 warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')]  WARN: $*" >&2; }
@@ -53,52 +48,42 @@ if [[ ! -d "${MC_DATA_DIR}" ]]; then
   exit 1
 fi
 
+# ── Discover RCON credentials ─────────────────────────────────────────────────
+if [[ -f "${SERVER_PROPERTIES}" ]]; then
+  RCON_PASSWORD=$(grep -E '^rcon\.password=' "${SERVER_PROPERTIES}" | tail -n 1 | cut -d= -f2- || true)
+fi
+
 # ── RCON helper ───────────────────────────────────────────────────────────────
 RCON_AVAILABLE=false
 
 rcon_cmd() {
-  # Use docker exec + rcon-cli if the container is running
-  if docker exec mc rcon-cli --host "${RCON_HOST}" \
-       --port "${RCON_PORT}" \
-       --password "${RCON_PASSWORD:-}" \
-       "$@" &>/dev/null 2>&1; then
-    return 0
-  fi
-  return 1
+  command -v mcrcon >/dev/null 2>&1 || return 1
+  [[ -n "${RCON_PASSWORD}" ]] || return 1
+  mcrcon -H "${RCON_HOST}" \
+         -P "${RCON_PORT}" \
+         -p "${RCON_PASSWORD}" \
+         "$@" >/dev/null 2>&1
 }
 
-if docker ps --filter "name=^mc$" --filter "status=running" \
-     --format "{{.Names}}" 2>/dev/null | grep -q "^mc$"; then
-  if docker exec mc rcon-cli \
-       --host "${RCON_HOST}" \
-       --port "${RCON_PORT}" \
-       --password "${RCON_PASSWORD:-}" \
-       "list" &>/dev/null 2>&1; then
+if systemctl is-active --quiet "${MC_SERVICE}" 2>/dev/null; then
+  if rcon_cmd "list"; then
     RCON_AVAILABLE=true
     log "RCON connection established."
   else
-    warn "Minecraft container is running but RCON is not available."
+    warn "Minecraft service is running but RCON is not available."
     warn "Backup will proceed without save-off (data may be mid-write)."
   fi
 else
-  warn "Minecraft container is not running. Backing up static data."
+  warn "Minecraft service is not running. Backing up static data."
 fi
 
 # ── Pause world saves ─────────────────────────────────────────────────────────
 if [[ "${RCON_AVAILABLE}" == "true" ]]; then
   log "Disabling auto-save (save-off)..."
-  docker exec mc rcon-cli \
-    --host "${RCON_HOST}" \
-    --port "${RCON_PORT}" \
-    --password "${RCON_PASSWORD:-}" \
-    "save-off" || warn "save-off failed — continuing anyway."
+  rcon_cmd "save-off" || warn "save-off failed — continuing anyway."
 
   log "Flushing world to disk (save-all flush)..."
-  docker exec mc rcon-cli \
-    --host "${RCON_HOST}" \
-    --port "${RCON_PORT}" \
-    --password "${RCON_PASSWORD:-}" \
-    "save-all flush" || warn "save-all flush failed — continuing anyway."
+  rcon_cmd "save-all flush" || warn "save-all flush failed — continuing anyway."
 
   # Brief pause to let the flush complete
   sleep 3
@@ -118,11 +103,7 @@ log "Restic backup completed."
 # ── Re-enable world saves ─────────────────────────────────────────────────────
 if [[ "${RCON_AVAILABLE}" == "true" ]]; then
   log "Re-enabling auto-save (save-on)..."
-  docker exec mc rcon-cli \
-    --host "${RCON_HOST}" \
-    --port "${RCON_PORT}" \
-    --password "${RCON_PASSWORD:-}" \
-    "save-on" || warn "save-on failed — you may need to run it manually."
+  rcon_cmd "save-on" || warn "save-on failed — you may need to run it manually."
 fi
 
 # ── Prune old snapshots ───────────────────────────────────────────────────────

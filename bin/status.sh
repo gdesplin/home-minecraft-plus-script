@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # status.sh — Health-check dashboard for the homelab
-# Shows: Docker, Minecraft, DuckDNS, backups, UFW, disk usage
+# Shows: Docker, Minecraft, WireGuard relay, backups, UFW, disk usage
 set -euo pipefail
 
 SEP="──────────────────────────────────────────────"
-MC_DIR="/opt/minecraft"
 RESTIC_ENV="/etc/restic/restic.env"
-DUCKDNS_LOG="/var/log/duckdns.log"
 
 ok()   { printf "  \033[32m✓\033[0m  %s\n" "$*"; }
 warn() { printf "  \033[33m⚠\033[0m  %s\n" "$*"; }
@@ -38,35 +36,17 @@ else
   echo "     Run: sudo systemctl start minecraft.service"
 fi
 
-# ── Playit.gg agent ───────────────────────────────────────────────────────────
-hdr "Playit.gg Agent"
-if [[ ! -f "/etc/systemd/system/playit.service" ]]; then
-  warn "playit.service not installed."
-  echo "     If you are behind CGNAT, run: sudo bash bin/setup-playit.sh"
-elif systemctl is-active --quiet playit.service 2>/dev/null; then
-  ok "playit.service is running."
-  journalctl -u playit -n 3 --no-pager --output=cat 2>/dev/null \
-    | while IFS= read -r line; do echo "     ${line}"; done || true
+# ── WireGuard relay ───────────────────────────────────────────────────────────
+hdr "WireGuard Relay"
+if ip link show wg0 >/dev/null 2>&1; then
+  ok "wg0 interface is present."
+  WG_STATE=$(ip -brief addr show wg0 2>/dev/null | tr -s ' ')
+  [[ -n "${WG_STATE}" ]] && echo "     ${WG_STATE}"
+  WG_ROUTE=$(ip route show dev wg0 2>/dev/null | head -n 1 || true)
+  [[ -n "${WG_ROUTE}" ]] && echo "     Route : ${WG_ROUTE}"
 else
-  warn "playit.service is installed but NOT running."
-  echo "     Run: sudo systemctl start playit.service"
-fi
-
-# ── DuckDNS ───────────────────────────────────────────────────────────────────
-hdr "DuckDNS"
-if systemctl is-active --quiet duckdns.timer 2>/dev/null; then
-  ok "DuckDNS timer is active."
-  NEXT=$(systemctl show duckdns.timer -p NextElapseUSecRealtime --value 2>/dev/null || echo "unknown")
-  LAST=$(systemctl show duckdns.timer -p LastTriggerUSec --value 2>/dev/null || echo "unknown")
-  echo "     Last trigger : ${LAST}"
-  echo "     Next trigger : ${NEXT}"
-  if [[ -f "${DUCKDNS_LOG}" ]]; then
-    LAST_LOG=$(tail -1 "${DUCKDNS_LOG}" 2>/dev/null || echo "(empty)")
-    echo "     Last update  : ${LAST_LOG}"
-  fi
-else
-  warn "DuckDNS timer is NOT active."
-  echo "     Run: sudo bash bin/setup-duckdns.sh"
+  warn "wg0 interface is NOT present."
+  echo "     Check the WireGuard config on this host and the Oracle VPS."
 fi
 
 # ── Backups ───────────────────────────────────────────────────────────────────

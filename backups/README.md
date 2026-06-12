@@ -65,8 +65,7 @@ sudo RESTIC_REPOSITORY=<your-repo> RESTIC_PASSWORD=<your-password> restic snapsh
 
 ```bash
 # Stop the server
-cd /opt/minecraft
-sudo docker compose stop
+sudo systemctl stop minecraft.service
 
 # Load restic env
 source /etc/restic/restic.env   # or export RESTIC_REPOSITORY / RESTIC_PASSWORD manually
@@ -83,7 +82,7 @@ sudo restic restore latest --target /
 ls -la /opt/minecraft/data/
 
 # Start the server
-sudo docker compose start
+sudo systemctl start minecraft.service
 ```
 
 ### Restore a Specific Snapshot

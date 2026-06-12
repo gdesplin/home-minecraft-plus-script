@@ -1,6 +1,4 @@
 # Secret environment files — never commit these
-minecraft/.env
-duckdns/.env
 backups/restic.env
 /etc/restic/
 
